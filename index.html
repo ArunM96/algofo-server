@@ -704,7 +704,7 @@ function AlgoTerminal() {
             ws.onclose = () => {
                 setWsConnected(false);
                 addLog("⚠️ WebSocket disconnected — reconnecting in 5s...", LOG.WARN);
-                setTimeout(() => connectBackendWS(), 5000);
+                setTimeout(() => connectBackendWS(), 30000); // 30s reconnect
             };
         }
         catch (e) {
@@ -944,12 +944,15 @@ Provide concise, actionable advice. Always protect margin. Flag if bot should pa
     const statusColor = { idle: "#444466", scanning: "#ffcc00", signal: "#00e87a", blocked: "#ff3355" }[botStatus];
     // Compute ATM fresh from live LTP every render — don't rely on async state
     const liveAtm = useMemo(() => {
-        var _a;
+        var _a, _b;
         const curLtp = selIndex === "BANKNIFTY" ? bnLtp : selIndex === "SENSEX" ? sensexLtp : niftyLtp;
-        if (!curLtp || !optChain.length)
+        // Use underlying_spot_price from chain data when LTP not available (market closed)
+        const spotFromChain = ((_b = optChain[0]) === null || _b === void 0 ? void 0 : _b.underlying_spot_price) || 0;
+        const effectiveLtp = curLtp || spotFromChain;
+        if (!effectiveLtp || !optChain.length)
             return atmStrike || 0;
         const step = selIndex === "BANKNIFTY" ? 100 : 50;
-        const computed = Math.round(curLtp / step) * step;
+        const computed = Math.round(effectiveLtp / step) * step;
         // Find nearest actual strike in chain
         let nearest = ((_a = optChain[0]) === null || _a === void 0 ? void 0 : _a.strike_price) || computed;
         let minDiff = Math.abs(nearest - computed);
