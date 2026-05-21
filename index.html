@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
-<meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <title>AlgoFO Terminal</title>
 <style>
@@ -17,6 +16,32 @@ body{height:100%;height:100dvh;background:#07070f;color:#dde0ee;overflow:hidden;
 </style>
 </head>
 <body>
+
+<style>
+  /* Force safe area via CSS variable with JS fallback */
+  :root { --sat: env(safe-area-inset-top, 44px); }
+  .topbar {
+    padding-top: max(44px, var(--sat)) !important;
+    min-height: calc(50px + max(44px, var(--sat))) !important;
+  }
+</style>
+<script>
+// Measure actual safe area and apply it
+(function() {
+  var el = document.createElement('div');
+  el.style.cssText = 'position:fixed;top:env(safe-area-inset-top,0);left:0;width:1px;height:1px;';
+  document.documentElement.appendChild(el);
+  var sat = parseInt(window.getComputedStyle(el).top) || 47;
+  el.remove();
+  document.documentElement.style.setProperty('--sat', sat + 'px');
+  // Apply directly to topbar once DOM is ready
+  document.addEventListener('DOMContentLoaded', function() {
+    var style = document.createElement('style');
+    style.textContent = '.topbar { padding-top: ' + Math.max(44, sat) + 'px !important; min-height: calc(50px + ' + Math.max(44, sat) + 'px) !important; }';
+    document.head.appendChild(style);
+  });
+})();
+</script>
 <div id="loading">
   <div class="ring"></div>
   <div style="color:#00e87a;font-weight:700;letter-spacing:2px;font-size:15px;">AlgoFO Terminal</div>
@@ -994,15 +1019,15 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
   --text:#dde0ee;--muted:#4a4a6a;--muted2:#777799;
 }
 /* Layout */
-.app{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);
-  padding-top:0;/* safe area handled by topbar */}
-/* Top bar - with safe area for notch/status bar */
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);}
+/* Top bar - safe area for iPhone status bar */
 .topbar{flex-shrink:0;background:var(--s1);border-bottom:1px solid var(--bdr);
-  padding:env(safe-area-inset-top,0px) 10px 0 10px;
+  padding-top:max(12px,env(safe-area-inset-top));
+  padding-bottom:8px;
   padding-left:max(10px,env(safe-area-inset-left));
   padding-right:max(10px,env(safe-area-inset-right));
-  min-height:50px;height:calc(50px + env(safe-area-inset-top,0px));
-  display:flex;align-items:flex-end;padding-bottom:6px;gap:8px;overflow:hidden;}
+  min-height:calc(54px + env(safe-area-inset-top,0px));
+  display:flex;align-items:flex-end;gap:8px;overflow:hidden;}
 .logo{font-weight:900;font-size:16px;flex-shrink:0;letter-spacing:-0.5px;}
 .logo em{color:var(--g);font-style:normal;}
 .logo sub{color:var(--b);font-size:10px;}
