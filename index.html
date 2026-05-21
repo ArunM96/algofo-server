@@ -324,6 +324,14 @@ function AlgoTerminal() {
     // Backend server handles all Upstox calls (no CORS issues)
     // Backend URL — set to your Render/Railway URL after deploying
     const [backendUrl, setBackendUrl] = useLS("backend_url", "");
+    const [backendUrlInput, setBackendUrlInput] = useState(() => {
+        try {
+            return localStorage.getItem("backend_url") || "";
+        }
+        catch (_a) {
+            return "";
+        }
+    });
     const apiCall = useCallback(async (endpoint, params = "", tkn = token) => {
         if (!tkn)
             return {};
@@ -462,7 +470,7 @@ function AlgoTerminal() {
             addLog("Fetch error: " + e.message, LOG.WARN);
         }
     }, [token, upGet, addLog]);
-    const fetchLtp = useCallback(async (tkn = token) => {
+    const fetchLtp = useCallback(async (tkn = token, forceIndex = null) => {
         var _a, _b, _c;
         if (!tkn)
             return;
@@ -482,25 +490,37 @@ function AlgoTerminal() {
                 if (sx)
                     setSensexLtp(sx);
                 // ATM based on currently selected index
-                const curLtp = selIndex === "BANKNIFTY" ? bn : selIndex === "SENSEX" ? sx : nf;
+                const idx = forceIndex || selIndex;
+                const curLtp = idx === "BANKNIFTY" ? bn : idx === "SENSEX" ? sx : nf;
                 if (curLtp > 0) {
-                    // Nifty/Sensex: round to 50, BankNifty: round to 100
-                    const step = selIndex === "BANKNIFTY" ? 100 : selIndex === "SENSEX" ? 100 : 50;
-                    setAtmStrike(Math.round(curLtp / step) * step);
+                    const step = idx === "BANKNIFTY" ? 100 : 50;
+                    const newAtm = Math.round(curLtp / step) * step;
+                    setAtmStrike(newAtm);
+                    // ATM set — liveAtm memo handles display
                 }
             }
         }
         catch (_d) { }
-    }, [token, upGet, selIndex]);
+    }, [token, upGet, selIndex]); // fetchLtp
     const fetchExpiries = useCallback(async (tkn = token) => {
         try {
             const key = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
+            addLog(`📅 Fetching expiries for: ${selIndex} (${key})`, LOG.INFO);
             const d = await upGet(`/option/contract?instrument_key=${encodeURIComponent(key)}`, tkn);
             if (d.data) {
-                const dates = [...new Set(d.data.map(x => x.expiry))].sort();
-                setExpiryList(dates);
-                if (!expiry && dates.length)
-                    setExpiry(dates[0]);
+                const today = new Date();
+                const sixMonths = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
+                // Filter to only show expiries within next 6 months + auto-select nearest
+                const allDates = [...new Set(d.data.map(x => x.expiry))].sort();
+                const relevant = allDates.filter(d => {
+                    const dt = new Date(d);
+                    return dt >= today && dt <= sixMonths;
+                });
+                const filtered = relevant.length > 0 ? relevant : allDates.slice(0, 8);
+                setExpiryList(filtered);
+                if (!expiry && filtered.length)
+                    setExpiry(filtered[0]);
+                addLog(`📅 ${selIndex}: ${filtered.length} expiries (next 6M)`, LOG.INFO);
             }
         }
         catch (e) {
@@ -508,21 +528,23 @@ function AlgoTerminal() {
         }
     }, [token, selIndex, upGet, expiry, setExpiry, addLog]);
     const fetchChain = useCallback(async (tkn = token) => {
-        var _a;
+        var _a, _b, _c;
         if (!tkn || !expiry)
             return;
         try {
             const key = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
-            const d = await upGet(`/option/chain?instrument_key=${encodeURIComponent(key)}&expiry_date=${expiry}&_t=${Date.now()}`, tkn);
+            addLog(`🔗 Fetching chain: ${selIndex} | key:${key} | expiry:${expiry}`, LOG.INFO);
+            // Force fresh data — no cache
+            const d = await upGet(`/option/chain?instrument_key=${encodeURIComponent(key)}&expiry_date=${expiry}&_t=${Date.now()}&force=1`, tkn);
             if (d.data) {
                 const chain = d.data;
                 setOptChain(chain);
-                // Set ATM from chain mid-point if not already set from LTP
-                if (!atmStrike && chain.length > 0) {
-                    const mid = ((_a = chain[Math.floor(chain.length / 2)]) === null || _a === void 0 ? void 0 : _a.strike_price) || 0;
-                    if (mid)
-                        setAtmStrike(mid);
-                    addLog(`ℹ️ ATM set from chain midpoint: ${mid}`, LOG.INFO);
+                // Validate chain - log strike range
+                if (chain.length > 0) {
+                    const first = (_a = chain[0]) === null || _a === void 0 ? void 0 : _a.strike_price;
+                    const last = (_b = chain[chain.length - 1]) === null || _b === void 0 ? void 0 : _b.strike_price;
+                    const mid = (_c = chain[Math.floor(chain.length / 2)]) === null || _c === void 0 ? void 0 : _c.strike_price;
+                    addLog(`📊 ${selIndex} chain: ${chain.length} strikes | ${first}→${mid}→${last}`, LOG.INFO);
                 }
                 const tCallOI = chain.reduce((s, r) => { var _a, _b; return s + (((_b = (_a = r.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0); }, 0);
                 const tPutOI = chain.reduce((s, r) => { var _a, _b; return s + (((_b = (_a = r.put_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0); }, 0);
@@ -566,21 +588,175 @@ function AlgoTerminal() {
             fetchLtp(token).then(() => fetchChain(token));
         }
     }, [expiry, selIndex, connected]); // eslint-disable-line
+    // Fast market data polling using bulk /api/market endpoint
+    const fetchMarketBulk = useCallback(async () => {
+        var _a, _b, _c, _d, _e, _f, _g;
+        if (!token || !backendUrl)
+            return;
+        const idxKey = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
+        try {
+            const url = `${backendUrl}/api/market?instrument_key=${encodeURIComponent(idxKey)}&expiry_date=${expiry}&_t=${Date.now()}`;
+            const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+            if (!r.ok)
+                return;
+            const d = await r.json();
+            // LTP
+            if ((_a = d.ltp) === null || _a === void 0 ? void 0 : _a.data) {
+                const nf = ((_b = d.ltp.data["NSE_INDEX|Nifty 50"]) === null || _b === void 0 ? void 0 : _b.last_price) || 0;
+                const bn = ((_c = d.ltp.data["NSE_INDEX|Nifty Bank"]) === null || _c === void 0 ? void 0 : _c.last_price) || 0;
+                const sx = ((_d = d.ltp.data["BSE_INDEX|SENSEX"]) === null || _d === void 0 ? void 0 : _d.last_price) || 0;
+                if (nf) {
+                    setNiftyLtp(nf);
+                    setLtpHist(p => [...p.slice(-59), nf]);
+                }
+                if (bn)
+                    setBnLtp(bn);
+                if (sx)
+                    setSensexLtp(sx);
+                const curLtp = selIndex === "BANKNIFTY" ? bn : selIndex === "SENSEX" ? sx : nf;
+                if (curLtp > 0) {
+                    const step = selIndex === "BANKNIFTY" ? 100 : 50;
+                    setAtmStrike(Math.round(curLtp / step) * step);
+                }
+            }
+            // Chain
+            if ((_e = d.chain) === null || _e === void 0 ? void 0 : _e.data) {
+                const chain = d.chain.data;
+                setOptChain(chain);
+                const tC = chain.reduce((s, r) => { var _a, _b; return s + (((_b = (_a = r.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0); }, 0);
+                const tP = chain.reduce((s, r) => { var _a, _b; return s + (((_b = (_a = r.put_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0); }, 0);
+                if (tC > 0)
+                    setPcr(tP / tC);
+                const byCV = [...chain].sort((a, b) => { var _a, _b, _c, _d; return (((_b = (_a = b.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.volume) || 0) - (((_d = (_c = a.call_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.volume) || 0); });
+                const byPV = [...chain].sort((a, b) => { var _a, _b, _c, _d; return (((_b = (_a = b.put_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.volume) || 0) - (((_d = (_c = a.put_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.volume) || 0); });
+                setActiveCall(byCV[0]);
+                setActivePut(byPV[0]);
+                const cOI = [...chain].sort((a, b) => { var _a, _b, _c, _d; return (((_b = (_a = b.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0) - (((_d = (_c = a.call_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.oi) || 0); });
+                const pOI = [...chain].sort((a, b) => { var _a, _b, _c, _d; return (((_b = (_a = b.put_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0) - (((_d = (_c = a.put_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.oi) || 0); });
+                setResistances(cOI.slice(0, 3).map(r => r.strike_price));
+                setSupports(pOI.slice(0, 3).map(r => r.strike_price));
+            }
+            // Positions & funds
+            if ((_f = d.positions) === null || _f === void 0 ? void 0 : _f.data)
+                setPositions(d.positions.data);
+            if ((_g = d.funds) === null || _g === void 0 ? void 0 : _g.data)
+                setFunds(d.funds.data);
+        }
+        catch (_h) { }
+    }, [token, backendUrl, selIndex, expiry, setNiftyLtp, setBnLtp, setSensexLtp, setAtmStrike, setOptChain, setPcr, setPositions, setFunds]);
+    // ── Real-time WebSocket connection to backend ──
+    const wsRef = useRef(null);
+    const [wsConnected, setWsConnected] = useState(false);
+    const connectBackendWS = useCallback(() => {
+        if (!backendUrl || !token)
+            return;
+        if (wsRef.current && wsRef.current.readyState === 1)
+            return; // already open
+        const wsUrl = backendUrl.replace("https://", "wss://").replace("http://", "ws://") + "/ws";
+        addLog("🔌 Connecting WebSocket to backend...", LOG.INFO);
+        try {
+            const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
+            ws.onopen = () => {
+                setWsConnected(true);
+                addLog("⚡ WebSocket connected — real-time data active", LOG.INFO);
+                // Tell backend to start Upstox WS with our instruments
+                const idxKey = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
+                ws.send(JSON.stringify({
+                    type: "subscribe",
+                    token,
+                    instruments: [idxKey, "NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank", "BSE_INDEX|SENSEX"]
+                }));
+            };
+            ws.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    if (msg.type === "ltp" && msg.data) {
+                        Object.entries(msg.data).forEach(([key, val]) => {
+                            const price = val.ltp || val.last_price || 0;
+                            if (key === "NSE_INDEX|Nifty 50" && price) {
+                                setNiftyLtp(price);
+                                setLtpHist(p => [...p.slice(-59), price]);
+                            }
+                            if (key === "NSE_INDEX|Nifty Bank" && price)
+                                setBnLtp(price);
+                            if (key === "BSE_INDEX|SENSEX" && price)
+                                setSensexLtp(price);
+                            // Update ATM
+                            const curKey = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
+                            if (key === curKey && price) {
+                                // BankNifty ~53k rounds to 100, Nifty ~24k rounds to 50
+                                const step = selIndex === "BANKNIFTY" ? 100 : 50;
+                                const newAtm = Math.round(price / step) * step;
+                                setAtmStrike(newAtm);
+                                setNiftyLtp(prev => key === "NSE_INDEX|Nifty 50" ? price : prev);
+                                setBnLtp(prev => key === "NSE_INDEX|Nifty Bank" ? price : prev);
+                            }
+                        });
+                    }
+                    if (msg.type === "tick") { /* heartbeat */ }
+                }
+                catch (_a) { }
+            };
+            ws.onerror = () => { setWsConnected(false); };
+            ws.onclose = () => {
+                setWsConnected(false);
+                addLog("⚠️ WebSocket disconnected — reconnecting in 5s...", LOG.WARN);
+                setTimeout(() => connectBackendWS(), 5000);
+            };
+        }
+        catch (e) {
+            addLog("WS error: " + e.message, LOG.ERROR);
+        }
+    }, [backendUrl, token, selIndex, addLog]);
+    // Connect WS on startup if backend URL is set
+    useEffect(() => {
+        if (connected && backendUrl)
+            connectBackendWS();
+    }, [connected, backendUrl]); // eslint-disable-line
+    // Also kick off Upstox server-side WS via REST
+    useEffect(() => {
+        if (!connected || !backendUrl || !token)
+            return;
+        const idxKey = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
+        fetch(`${backendUrl}/api/ws-start`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ token, instruments: [idxKey, "NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank", "BSE_INDEX|SENSEX"] })
+        }).then(r => r.json()).then(d => addLog(`🔌 Backend WS: ${d.status || "started"}`, LOG.INFO)).catch(() => { });
+    }, [connected, backendUrl, token, selIndex]); // eslint-disable-line
     useEffect(() => {
         if (!connected)
             return;
-        const t = setInterval(() => {
-            fetchLtp();
-            fetchAll();
-            // Auto-refresh chain every 60s during market hours
-            const h = new Date().getHours(), m = new Date().getMinutes(), tot = h * 60 + m;
+        // During market hours: 5s refresh | Pre/post market: 15s | Closed: 60s
+        const getInterval = () => {
+            const now2 = new Date();
+            const h = now2.getHours(), m = now2.getMinutes(), tot = h * 60 + m;
+            const day = now2.getDay();
+            if (day === 0 || day === 6)
+                return 60000;
+            if (tot >= 930 && tot < 930 + 375)
+                return 5000; // Market open: 5s
             if (tot >= 555 && tot < 930)
-                fetchChain(); // pre-market
-            else if (tot >= 930 && tot < 930 + 375)
-                fetchChain(); // market open
-        }, 30000);
-        return () => clearInterval(t);
-    }, [connected, fetchLtp, fetchAll, fetchChain]);
+                return 10000; // Pre-market: 10s
+            return 30000; // Closed: 30s
+        };
+        let timer;
+        const tick = () => {
+            if (backendUrl) {
+                fetchMarketBulk();
+            }
+            else {
+                fetchLtp();
+                fetchAll();
+                if (expiry)
+                    fetchChain();
+            }
+            timer = setTimeout(tick, getInterval());
+        };
+        timer = setTimeout(tick, getInterval());
+        return () => clearTimeout(timer);
+    }, [connected, backendUrl, fetchMarketBulk, fetchLtp, fetchAll, fetchChain, expiry]);
     // ── Risk check ──
     const riskOk = useCallback(() => {
         var _a, _b, _c;
@@ -764,14 +940,35 @@ Provide concise, actionable advice. Always protect margin. Flag if bot should pa
     const usedM = funds ? ((((_a = funds.equity) === null || _a === void 0 ? void 0 : _a.used_margin) || 0) / Math.max(1, (((_b = funds.equity) === null || _b === void 0 ? void 0 : _b.available_margin) || 0) + (((_c = funds.equity) === null || _c === void 0 ? void 0 : _c.used_margin) || 0))) * 100 : 0;
     const pcrColor = pcr > 1.2 ? "#00e87a" : pcr < 0.8 ? "#ff3355" : "#ffcc00";
     const statusColor = { idle: "#444466", scanning: "#ffcc00", signal: "#00e87a", blocked: "#ff3355" }[botStatus];
+    // Compute ATM fresh from live LTP every render — don't rely on async state
+    const liveAtm = useMemo(() => {
+        var _a;
+        const curLtp = selIndex === "BANKNIFTY" ? bnLtp : selIndex === "SENSEX" ? sensexLtp : niftyLtp;
+        if (!curLtp || !optChain.length)
+            return atmStrike || 0;
+        const step = selIndex === "BANKNIFTY" ? 100 : 50;
+        const computed = Math.round(curLtp / step) * step;
+        // Find nearest actual strike in chain
+        let nearest = ((_a = optChain[0]) === null || _a === void 0 ? void 0 : _a.strike_price) || computed;
+        let minDiff = Math.abs(nearest - computed);
+        for (const r of optChain) {
+            const diff = Math.abs(r.strike_price - computed);
+            if (diff < minDiff) {
+                minDiff = diff;
+                nearest = r.strike_price;
+            }
+        }
+        return nearest;
+    }, [optChain, selIndex, bnLtp, niftyLtp, sensexLtp, atmStrike]);
     const atmRows = useMemo(() => {
         if (!optChain.length)
             return [];
-        const idx = optChain.findIndex(r => r.strike_price >= atmStrike);
+        const atm = liveAtm || atmStrike;
+        const idx = optChain.findIndex(r => r.strike_price >= atm);
         const mid = idx < 0 ? Math.floor(optChain.length / 2) : idx;
         const s = Math.max(0, mid - 10);
         return optChain.slice(s, s + 21); // 10 ITM + ATM + 10 OTM = 21
-    }, [optChain, atmStrike]);
+    }, [optChain, liveAtm, atmStrike]);
     // Strategy form
     const emptyS = { id: "", name: "", mode: "BOTH", qty: 1, useATM: true, manualStrike: 0, tradingIndex: "NIFTY", tradingExpiry: "" };
     const [newS, setNewS] = useState(Object.assign({}, emptyS));
@@ -989,18 +1186,45 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
             React.createElement("button", { className: "btn ol sm", onClick: () => { fetchLtp(); fetchChain(); } }, "\u21BB")),
         (() => {
             const curLtp = selIndex === "BANKNIFTY" ? bnLtp : selIndex === "SENSEX" ? sensexLtp : niftyLtp;
-            return (React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 10, marginBottom: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
-                React.createElement("span", { style: { color: "var(--text)", fontWeight: 700 } }, selIndex),
-                React.createElement("span", { style: { color: curLtp > 0 ? "var(--g)" : "var(--muted)", fontWeight: 700, fontSize: 13 } }, curLtp > 0 ? fmt(curLtp, 2) : "—"),
-                React.createElement("span", { style: { color: "var(--muted)" } }, "|"),
-                React.createElement("span", { style: { color: "var(--muted)" } }, "Exp:"),
-                React.createElement("span", { style: { color: "var(--y)" } }, expiry || "not set"),
-                React.createElement("span", { style: { color: "var(--muted)" } }, "|"),
-                React.createElement("span", { style: { color: "var(--muted)" } }, "PCR:"),
-                React.createElement("span", { style: { color: pcrColor, fontWeight: 700 } }, pcr > 0 ? fmt(pcr, 2) : "—"),
-                React.createElement("span", { style: { color: "var(--muted)" } }, "|"),
-                React.createElement("span", { style: { color: "var(--muted)" } }, "ATM:"),
-                React.createElement("span", { style: { color: "var(--g)", fontWeight: 700 } }, atmStrike || "—")));
+            return (React.createElement("div", null,
+                React.createElement("div", { style: { display: "flex", gap: 5, marginBottom: 8 } },
+                    [["NIFTY", "NF"], ["BANKNIFTY", "BN"], ["SENSEX", "SX"]].map(([val, short]) => (React.createElement("button", { key: val, onClick: () => {
+                            if (selIndex === val)
+                                return;
+                            setSelIndex(val);
+                            setExpiry("");
+                            setExpiryList([]);
+                            setOptChain([]);
+                            setAtmStrike(0);
+                            addLog("🔄 Switching to " + val, LOG.INFO);
+                            fetchLtp(token, val).then(() => fetchExpiries(token));
+                        }, style: {
+                            flex: 1, background: selIndex === val ? "rgba(0,232,122,0.12)" : "var(--s1)",
+                            border: `1px solid ${selIndex === val ? "var(--g)" : "var(--bdr)"}`,
+                            borderRadius: 6, padding: "5px 4px", cursor: "pointer",
+                            color: selIndex === val ? "var(--g)" : "var(--muted2)",
+                            fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
+                            transition: "all 0.15s"
+                        } }, short))),
+                    React.createElement("button", { onClick: () => fetchChain(token), style: {
+                            background: "var(--s1)", border: "1px solid var(--bdr2)", borderRadius: 6,
+                            padding: "5px 8px", cursor: "pointer", color: "var(--muted2)", fontFamily: "var(--mono)", fontSize: 11
+                        } }, "\u21BB")),
+                React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 10, marginBottom: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
+                    React.createElement("span", { style: { color: curLtp > 0 ? "var(--g)" : "var(--muted)", fontWeight: 700, fontSize: 14 } }, curLtp > 0 ? fmt(curLtp, 2) : React.createElement("span", { style: { fontSize: 10, color: "var(--muted)" } }, "Market closed")),
+                    React.createElement("span", { style: { color: "var(--muted)" } }, "Exp:"),
+                    React.createElement("span", { style: { color: "var(--y)" } }, expiry || "not set"),
+                    React.createElement("span", { style: { color: "var(--muted)" } }, "PCR:"),
+                    React.createElement("span", { style: { color: pcrColor, fontWeight: 700 } }, pcr > 0 ? fmt(pcr, 2) : "—"),
+                    React.createElement("span", { style: { color: "var(--muted)" } }, "ATM:"),
+                    React.createElement("span", { style: { color: "var(--g)", fontWeight: 700 } }, liveAtm || atmStrike || "—")),
+                expiryList.length > 0 && (React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 } }, expiryList.map(d => (React.createElement("button", { key: d, onClick: () => { setExpiry(d); fetchChain(token); }, style: {
+                        background: expiry === d ? "rgba(0,232,122,0.12)" : "var(--s1)",
+                        border: `1px solid ${expiry === d ? "var(--g)" : "var(--bdr)"}`,
+                        borderRadius: 5, padding: "3px 8px", cursor: "pointer",
+                        color: expiry === d ? "var(--g)" : "var(--muted2)",
+                        fontFamily: "var(--mono)", fontSize: 10, fontWeight: expiry === d ? 700 : 400
+                    } }, d)))))));
         })(),
         React.createElement("div", { style: { marginBottom: 12 } },
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 0, marginBottom: 0 } },
@@ -1026,7 +1250,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                         React.createElement("td", { colSpan: 5, style: { textAlign: "center", color: "var(--muted)", padding: 20, fontSize: 11 } }, "Load chain in Settings \u2192 Market")),
                     atmRows.map((row, i) => {
                         var _a, _b, _c, _d, _e, _f, _g, _h;
-                        const isAtm = row.strike_price === atmStrike;
+                        const isAtm = row.strike_price === liveAtm || row.strike_price === atmStrike;
                         const isSel = (selStrike === null || selStrike === void 0 ? void 0 : selStrike.strike_price) === row.strike_price;
                         const isRes = resistances.includes(row.strike_price);
                         const isSup = supports.includes(row.strike_price);
@@ -1171,73 +1395,135 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
             React.createElement("div", { className: `itab ${settingsTab === "market" ? "a" : ""}`, onClick: () => setSettingsTab("market") }, "Market"),
             React.createElement("div", { className: `itab ${settingsTab === "ai" ? "a" : ""}`, onClick: () => setSettingsTab("ai") }, "AI")),
         settingsTab === "auth" && (React.createElement("div", null,
-            React.createElement("div", { className: "card" },
-                React.createElement("div", { className: "field" },
-                    React.createElement("div", { className: "lbl" }, "API Key"),
-                    React.createElement("input", { className: "inp", value: apiKey, onChange: e => setApiKey(e.target.value), placeholder: "86ff9e48-cec3-44b0-...", autoComplete: "off" })),
-                React.createElement("div", { className: "field" },
-                    React.createElement("div", { className: "lbl" }, "API Secret"),
-                    React.createElement("input", { className: "inp", type: "password", value: apiSecret, onChange: e => setApiSecret(e.target.value), placeholder: "abpva6e8dl" }))),
-            React.createElement("div", { className: "card", style: { marginTop: 8, border: "1px solid rgba(0,232,122,0.25)", background: "rgba(0,232,122,0.04)" } },
-                React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "var(--g)", fontFamily: "var(--mono)", marginBottom: 8 } }, "\u2705 METHOD A \u2014 Direct Token (Recommended)"),
-                React.createElement("div", { style: { fontSize: 11, color: "var(--muted2)", fontFamily: "var(--mono)", lineHeight: 1.8, marginBottom: 10 } },
-                    "1. Open Upstox app → My Apps → AlgoFo\n",
-                    "2. Tap ⬇️ dropdown → tap \"Generate access token\"\n",
-                    "3. Complete login if asked\n",
-                    "4. Copy the access_token value from the response\n",
-                    "5. Paste it below and tap Save Token"),
-                React.createElement("a", { href: "https://account.upstox.com/developer/apps", target: "_blank", rel: "noreferrer", style: { display: "block", background: "rgba(91,143,255,0.1)", border: "1px solid rgba(91,143,255,0.3)", borderRadius: 8, padding: "9px 12px", color: "var(--b)", fontFamily: "var(--mono)", fontSize: 11, marginBottom: 8, textDecoration: "none" } }, "\uD83D\uDD17 Open Upstox My Apps \u2192"),
-                React.createElement("div", { className: "field" },
-                    React.createElement("div", { className: "lbl" }, "Paste Access Token here"),
-                    React.createElement("textarea", { className: "inp", rows: 4, value: directToken, onChange: e => setDirectToken(e.target.value), placeholder: "Paste the full token starting with eyJ...", style: { resize: "none", fontSize: 11, lineHeight: 1.4 } })),
-                React.createElement("button", { className: "btn pr", style: { marginTop: 0 }, onClick: () => connectWithToken(directToken.trim()).then(() => setDirectToken("")) }, "\uD83D\uDD13 Save Token & Connect"),
+            React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } },
+                React.createElement("div", { style: { flex: 1, padding: "10px", borderRadius: 8, textAlign: "center",
+                        background: connected ? "rgba(0,232,122,0.08)" : "rgba(255,51,85,0.08)",
+                        border: `1px solid ${connected ? "rgba(0,232,122,0.25)" : "rgba(255,51,85,0.2)"}` } },
+                    React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted)", marginBottom: 3 } }, "UPSTOX"),
+                    React.createElement("div", { style: { fontSize: 12, fontFamily: "var(--mono)", fontWeight: 700, color: connected ? "var(--g)" : "var(--r)" } }, connected ? "✅ Connected" : "❌ Not set")),
+                React.createElement("div", { style: { flex: 1, padding: "10px", borderRadius: 8, textAlign: "center",
+                        background: backendUrl ? "rgba(0,232,122,0.08)" : "rgba(255,204,0,0.06)",
+                        border: `1px solid ${backendUrl ? "rgba(0,232,122,0.25)" : "rgba(255,204,0,0.2)"}` } },
+                    React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted)", marginBottom: 3 } }, "BACKEND"),
+                    React.createElement("div", { style: { fontSize: 12, fontFamily: "var(--mono)", fontWeight: 700, color: backendUrl ? "var(--g)" : "var(--y)" } }, backendUrl ? "✅ Active" : "⚠️ Not set"))),
+            React.createElement("div", { className: "card", style: { marginBottom: 8 } },
+                React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 10 } }, "\uD83D\uDD11 Upstox Token"),
+                React.createElement("a", { href: "https://account.upstox.com/developer/apps", target: "_blank", rel: "noreferrer", style: { display: "flex", alignItems: "center", justifyContent: "space-between",
+                        background: "var(--s1)", border: "1px solid var(--bdr2)", borderRadius: 8,
+                        padding: "10px 12px", color: "var(--b)", textDecoration: "none", marginBottom: 10 } },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700 } }, "Open Upstox \u2192 My Apps"),
+                        React.createElement("div", { style: { fontSize: 10, color: "var(--muted2)", marginTop: 2 } }, "Tap \u2B07\uFE0F \u2192 Generate access token \u2192 Copy")),
+                    React.createElement("span", { style: { fontSize: 18, color: "var(--b)" } }, "\u2192")),
+                React.createElement("div", { className: "field", style: { marginBottom: 8 } },
+                    React.createElement("div", { className: "lbl" }, "Paste token here"),
+                    React.createElement("textarea", { className: "inp", rows: 3, value: directToken, onChange: e => setDirectToken(e.target.value), placeholder: "eyJ0eXAiOiJKV1Qi...", style: { resize: "none", fontSize: 11, lineHeight: 1.4 } })),
+                React.createElement("button", { className: "btn pr", onClick: () => connectWithToken(directToken.trim()).then(() => setDirectToken("")) }, "\uD83D\uDD13 Save Token & Connect"),
                 token && React.createElement("div", { style: { marginTop: 8, padding: "6px 10px", background: "rgba(0,232,122,0.08)", borderRadius: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--g)" } },
                     "\u2705 Token active \u00B7 ",
-                    connected ? "Connected " : "Tap Refresh if needed")),
-            React.createElement("div", { className: "card", style: { marginTop: 8, border: "1px solid var(--bdr2)" } },
-                React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "var(--y)", fontFamily: "var(--mono)", marginBottom: 8 } }, "\u26A0\uFE0F METHOD B \u2014 OAuth (may be blocked by browser sandbox)"),
-                React.createElement("div", { style: { fontSize: 11, color: "var(--muted2)", fontFamily: "var(--mono)", lineHeight: 1.8, marginBottom: 10 } },
-                    "1. Tap the auth link → login on Upstox\n",
-                    "2. Browser redirects to a blank page\n",
-                    "3. Copy the full URL from address bar\n",
-                    "4. Paste below → tap Connect"),
-                authUrl && React.createElement("a", { href: authUrl, target: "_blank", rel: "noreferrer", style: { display: "block", background: "rgba(91,143,255,0.08)", border: "1px solid rgba(91,143,255,0.2)", borderRadius: 8, padding: "9px 12px", color: "var(--b)", fontFamily: "var(--mono)", fontSize: 11, marginBottom: 8, textDecoration: "none" } }, "\uD83D\uDD17 Open Upstox Auth Login \u2192"),
-                React.createElement("div", { className: "field" },
-                    React.createElement("div", { className: "lbl" }, "Redirect URL or Auth Code"),
-                    React.createElement("input", { className: "inp", value: authCode, onChange: e => setAuthCode(e.target.value), placeholder: "https://localhost/?code=XXXXX or just the code" })),
-                React.createElement("button", { className: "btn ol", onClick: connect, style: { marginTop: 0 } }, "\uD83D\uDD13 Connect via OAuth")),
-            React.createElement("div", { style: { marginTop: 8, padding: "8px 10px", background: "rgba(255,204,0,0.06)", border: "1px solid rgba(255,204,0,0.2)", borderRadius: 8, fontSize: 10, fontFamily: "var(--mono)", color: "var(--y)", lineHeight: 1.6 } }, "\u26A0\uFE0F Upstox tokens expire daily. Regenerate every morning before trading via Method A."))),
-        settingsTab === "market" && (React.createElement("div", { className: "card" },
-            React.createElement("div", { className: "field" },
-                React.createElement("div", { className: "lbl" }, "Index"),
-                React.createElement("select", { className: "sel", value: selIndex, onChange: e => {
-                        setSelIndex(e.target.value);
-                        setExpiry("");
-                        setExpiryList([]);
-                        setOptChain([]);
-                        setAtmStrike(0);
-                    } },
-                    React.createElement("option", { value: "NIFTY" }, "Nifty 50"),
-                    React.createElement("option", { value: "BANKNIFTY" }, "Bank Nifty"),
-                    React.createElement("option", { value: "SENSEX" }, "Sensex (BSE)"))),
-            React.createElement("div", { className: "field" },
-                React.createElement("div", { className: "lbl" }, "Expiry Date"),
-                React.createElement("select", { className: "sel", value: expiry, onChange: e => setExpiry(e.target.value) },
-                    React.createElement("option", { value: "" }, "\u2014 Select expiry \u2014"),
-                    expiryList.map(d => React.createElement("option", { key: d, value: d }, d)))),
-            React.createElement("div", { className: "field", style: { marginTop: 8 } },
-                React.createElement("div", { className: "lbl" }, "Backend Server URL"),
-                React.createElement("input", { className: "inp", value: backendUrl, onChange: e => setBackendUrl(e.target.value), placeholder: "https://your-app.onrender.com" }),
-                React.createElement("div", { style: { fontSize: 9, color: "var(--muted)", fontFamily: "var(--mono)", marginTop: 3, lineHeight: 1.6 } }, "Deploy server.py to Render.com (free) and paste URL here for live data")),
-            React.createElement("div", { style: { fontSize: 10, color: backendUrl ? "var(--g)" : "var(--y)", fontFamily: "var(--mono)", padding: "6px 8px", borderRadius: 6, background: backendUrl ? "rgba(0,232,122,0.08)" : "rgba(255,204,0,0.08)", marginBottom: 8 } }, backendUrl ? "✅ Backend configured — live data active" : "⚠️ No backend — set URL above for live data"),
-            React.createElement("button", { className: "btn pr", onClick: () => {
-                    setOptChain([]);
-                    setExpiryList([]);
+                    connected ? "Connected" : "Reconnecting..."),
+                React.createElement("div", { style: { marginTop: 8, fontSize: 10, fontFamily: "var(--mono)", color: "var(--y)", lineHeight: 1.5 } }, "\u26A0\uFE0F Token expires daily \u2014 regenerate every morning")),
+            React.createElement("div", { className: "card" },
+                React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 10 } }, "\uD83D\uDDA5 Backend Server (Render)"),
+                React.createElement("div", { className: "field", style: { marginBottom: 8 } },
+                    React.createElement("div", { className: "lbl" }, "Your Render URL"),
+                    React.createElement("input", { className: "inp", value: backendUrlInput, onChange: e => setBackendUrlInput(e.target.value), placeholder: "https://algofo-server.onrender.com", style: { borderColor: backendUrl ? "rgba(0,232,122,0.4)" : "var(--bdr2)" } })),
+                React.createElement("button", { className: "btn pr", onClick: () => {
+                        const url = backendUrlInput.trim().replace(/\/+$/, "");
+                        if (!url) {
+                            addLog("Enter backend URL first", LOG.ERROR);
+                            return;
+                        }
+                        setBackendUrl(url);
+                        addLog("✅ Backend saved: " + url, LOG.INFO);
+                        fetch(url + "/api/health").then(r => r.json())
+                            .then(d => addLog("✅ Backend alive · " + new Date(d.time * 1000).toLocaleTimeString(), LOG.INFO))
+                            .catch(() => addLog("⚠️ Backend offline — check Render dashboard", LOG.WARN));
+                    } }, "\uD83D\uDCBE Save & Test Connection"),
+                backendUrl && React.createElement("div", { style: { marginTop: 6, fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted2)", wordBreak: "break-all" } },
+                    "Active: ",
+                    backendUrl)))),
+        settingsTab === "market" && (React.createElement("div", null,
+            React.createElement("div", { style: { padding: "10px 12px", borderRadius: 8, marginBottom: 10, fontSize: 11, fontFamily: "var(--mono)",
+                    background: backendUrl ? "rgba(0,232,122,0.08)" : "rgba(255,51,85,0.08)",
+                    border: `1px solid ${backendUrl ? "rgba(0,232,122,0.25)" : "rgba(255,51,85,0.3)"}`,
+                    color: backendUrl ? "var(--g)" : "var(--r)", lineHeight: 1.6 } }, backendUrl ? (React.createElement(React.Fragment, null,
+                "\u2705 Backend: ",
+                React.createElement("span", { style: { color: "var(--text)" } }, backendUrl.replace("https://", "")))) : (React.createElement(React.Fragment, null,
+                "\u274C No backend URL set!",
+                React.createElement("br", null),
+                React.createElement("span", { style: { fontSize: 10, color: "var(--muted2)" } },
+                    "Go to Auth tab \u2192 paste your Render URL",
+                    React.createElement("br", null),
+                    "(https://algofo-server.onrender.com)")))),
+            React.createElement("div", { className: "stitle" }, "Select Index"),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 12 } }, [["NIFTY", "Nifty 50", "var(--g)"], ["BANKNIFTY", "BankNifty", "var(--b)"], ["SENSEX", "Sensex", "var(--y)"]].map(([val, label, col]) => (React.createElement("button", { key: val, onClick: () => {
+                    if (selIndex === val)
+                        return;
+                    setSelIndex(val);
                     setExpiry("");
+                    setExpiryList([]);
+                    setOptChain([]);
                     setAtmStrike(0);
-                    fetchLtp().then(() => fetchExpiries().then(() => setTimeout(fetchChain, 500)));
-                    addLog("🔄 Loading " + selIndex + " option chain...", LOG.INFO);
-                } }, "\uD83D\uDD04 Load Chain"))),
+                    addLog("🔄 Switching to " + val, LOG.INFO);
+                }, style: {
+                    background: selIndex === val ? `${col}18` : "var(--s2)",
+                    border: `2px solid ${selIndex === val ? col : "var(--bdr)"}`,
+                    borderRadius: 10, padding: "12px 6px", cursor: "pointer",
+                    color: selIndex === val ? col : "var(--muted2)",
+                    fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
+                    whiteSpace: "pre-line", lineHeight: 1.3,
+                    boxShadow: selIndex === val ? `0 0 12px ${col}33` : "none",
+                    transition: "all 0.2s"
+                } }, label)))),
+            React.createElement("div", { className: "stitle" }, "Select Expiry"),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 } },
+                expiryList.length === 0 && React.createElement("div", { style: { fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" } }, "Tap Load to fetch expiries"),
+                expiryList.map(d => (React.createElement("button", { key: d, onClick: () => setExpiry(d), style: {
+                        background: expiry === d ? "rgba(0,232,122,0.12)" : "var(--s2)",
+                        border: `1px solid ${expiry === d ? "var(--g)" : "var(--bdr)"}`,
+                        borderRadius: 6, padding: "6px 12px", cursor: "pointer",
+                        color: expiry === d ? "var(--g)" : "var(--muted2)",
+                        fontFamily: "var(--mono)", fontSize: 11, fontWeight: expiry === d ? 700 : 400,
+                        transition: "all 0.15s"
+                    } }, d)))),
+            React.createElement("button", { className: "btn pr", onClick: () => {
+                    // Clear everything before loading new index
+                    setOptChain([]);
+                    setPcr(0);
+                    setSupports([]);
+                    setResistances([]);
+                    setActiveCall(null);
+                    setActivePut(null);
+                    addLog(`🔄 Loading ${selIndex} chain (${expiry || "no expiry"})...`, LOG.INFO);
+                    if (!backendUrl) {
+                        addLog("⚠️ Set Backend URL in Auth tab first!", LOG.ERROR);
+                        return;
+                    }
+                    fetchLtp(token).then(() => {
+                        if (!expiry) {
+                            fetchExpiries(token).then(() => addLog("✅ Expiries loaded — select expiry and tap Load Chain", LOG.INFO));
+                        }
+                        else {
+                            setOptChain([]); // Clear stale data immediately
+                            addLog(`⏳ Fetching ${selIndex} chain...`, LOG.INFO);
+                            fetchChain(token).then(() => addLog(`✅ ${selIndex} chain loaded`, LOG.INFO));
+                        }
+                    });
+                } },
+                "\uD83D\uDD04 Load ",
+                selIndex,
+                " ",
+                expiry ? "Chain" : "Expiries"),
+            React.createElement("div", { style: { marginTop: 10, padding: "8px 10px", background: "var(--s1)", borderRadius: 8, fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", lineHeight: 1.8 } },
+                "\uD83D\uDD01 Auto-refresh: every 30s during market hours",
+                React.createElement("br", null),
+                "\uD83D\uDCCA Current: ",
+                React.createElement("span", { style: { color: "var(--text)" } }, selIndex),
+                " \u00B7 Expiry: ",
+                React.createElement("span", { style: { color: "var(--y)" } }, expiry || "not set"),
+                " \u00B7 ATM: ",
+                React.createElement("span", { style: { color: "var(--g)" } }, atmStrike || "—")))),
         settingsTab === "ai" && (React.createElement("div", { className: "card" },
             React.createElement("div", { style: { fontSize: 11, color: "var(--muted2)", fontFamily: "var(--mono)", marginBottom: 10, lineHeight: 1.6 } }, "Claude AI monitors geopolitical events, RBI/Fed announcements, earnings, and adjusts trading strategy recommendations in real time."),
             React.createElement("div", { className: "field" },
@@ -1258,15 +1544,18 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
     ];
     // Market open/close status
     const marketStatus = (() => {
+        // Always use IST (UTC+5:30) regardless of user's local timezone
         const now2 = new Date();
-        const h = now2.getHours(), m = now2.getMinutes(), tot = h * 60 + m;
-        const day = now2.getDay();
+        const utc = now2.getTime() + now2.getTimezoneOffset() * 60000;
+        const ist = new Date(utc + 19800000); // IST = UTC+5:30 = +19800 seconds
+        const h = ist.getHours(), m = ist.getMinutes(), tot = h * 60 + m;
+        const day = ist.getDay(); // day in IST
         if (day === 0 || day === 6)
             return { open: false, label: "Closed · Weekend" };
+        if (tot >= 540 && tot < 555)
+            return { open: false, label: "Pre-Market" }; // 9:00-9:15 AM IST
         if (tot >= 555 && tot < 930)
-            return { open: false, label: "Pre-market" };
-        if (tot >= 930 && tot < 930 + 375)
-            return { open: true, label: "Market Open" };
+            return { open: true, label: "Market Open" }; // 9:15 AM - 3:30 PM IST
         return { open: false, label: "Market Closed" };
     })();
     return (React.createElement(React.Fragment, null,
@@ -1286,8 +1575,24 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                         React.createElement("span", { style: { fontFamily: "var(--mono)", fontSize: 9, color: statusColor, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" } },
                             "Bot ",
                             botStatus)),
-                    React.createElement("div", { style: { width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--g)" : "var(--muted)", animation: connected ? "p 2s infinite" : "none", flexShrink: 0 } }))),
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 3, padding: "3px 7px", borderRadius: 5,
+                            border: `1px solid ${wsConnected ? "rgba(91,143,255,0.4)" : "rgba(255,204,0,0.3)"}`,
+                            background: wsConnected ? "rgba(91,143,255,0.08)" : "rgba(255,204,0,0.06)" } },
+                        React.createElement("div", { style: { width: 5, height: 5, borderRadius: "50%", background: wsConnected ? "var(--b)" : "var(--y)", animation: wsConnected ? "p 1s infinite" : "none" } }),
+                        React.createElement("span", { style: { fontFamily: "var(--mono)", fontSize: 9, color: wsConnected ? "var(--b)" : "var(--y)", fontWeight: 600 } }, wsConnected ? "LIVE" : "5S")),
+                    React.createElement("div", { title: "Upstox", style: { width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--g)" : "var(--muted)", animation: connected ? "p 2s infinite" : "none", flexShrink: 0 } }),
+                    backendUrl && React.createElement("div", { title: "WebSocket", style: { width: 6, height: 6, borderRadius: "50%", background: wsConnected ? "var(--b)" : "#ff660044", animation: wsConnected ? "p 1s infinite" : "none", flexShrink: 0 } }))),
             React.createElement("div", { style: { flexShrink: 0, background: "#0a0a16", borderBottom: "1px solid var(--bdr)", padding: "0 8px", height: 42, display: "flex", alignItems: "center", gap: 6 } },
+                (() => {
+                    const curLtp = selIndex === "BANKNIFTY" ? bnLtp : selIndex === "SENSEX" ? sensexLtp : niftyLtp;
+                    return curLtp > 0 ? (React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 3, padding: "2px 8px", borderRadius: 5,
+                            background: "rgba(0,232,122,0.06)", border: "1px solid rgba(0,232,122,0.2)", flexShrink: 0 } },
+                        React.createElement("span", { style: { fontFamily: "var(--mono)", fontSize: 8, color: "var(--muted)", fontWeight: 600 } }, selIndex === "BANKNIFTY" ? "BN" : selIndex === "SENSEX" ? "SX" : "NF"),
+                        React.createElement("span", { style: { fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: "var(--g)" } }, curLtp.toFixed(0)),
+                        (liveAtm || atmStrike) > 0 && React.createElement("span", { style: { fontFamily: "var(--mono)", fontSize: 9, color: "var(--y)" } },
+                            "ATM:",
+                            liveAtm || atmStrike))) : null;
+                })(),
                 React.createElement("select", { className: "sel", style: { flex: 1, padding: "4px 6px", fontSize: 11, height: 30, minWidth: 0 }, value: activeStratId || "", onChange: e => setActiveStratId(e.target.value || null) },
                     React.createElement("option", { value: "" }, "\u2014 Select Strategy \u2014"),
                     strategies.map(s => React.createElement("option", { key: s.id, value: s.id }, s.name))),
