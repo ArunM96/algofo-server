@@ -260,6 +260,12 @@ def frontend_ws(ws):
 
 @app.route("/")
 def home():
+    """Serve the frontend app if index.html exists, otherwise return status"""
+    import os
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+    if os.path.exists(html_path):
+        from flask import send_file
+        return send_file(html_path, mimetype="text/html")
     with _state_lock:
         ws_status = _state["ws_connected"]
         last_tick = _state["last_tick"]
