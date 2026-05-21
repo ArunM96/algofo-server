@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<title>AlgoFO Terminal</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+html{height:100%;height:100dvh;}
+body{height:100%;height:100dvh;background:#07070f;color:#dde0ee;overflow:hidden;position:fixed;width:100%;top:0;left:0;}
+#root{height:100%;height:100dvh;display:flex;flex-direction:column;}
+#loading{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;font-family:monospace;background:#07070f;position:fixed;inset:0;z-index:9999;padding:24px;text-align:center;}
+.ring{width:40px;height:40px;border:3px solid #1c1c30;border-top-color:#00e87a;border-radius:50%;animation:spin 1s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="loading">
+  <div class="ring"></div>
+  <div style="color:#00e87a;font-weight:700;letter-spacing:2px;font-size:15px;">AlgoFO Terminal</div>
+  <div id="ld-msg" style="font-size:10px;color:#444466">Loading...</div>
+</div>
+<div id="root"></div>
+<script>
+var CDNS=[
+  ['https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js','https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js'],
+  ['https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js','https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js'],
+  ['https://unpkg.com/react@18.2.0/umd/react.production.min.js','https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js']
+];
+var msg=document.getElementById('ld-msg');
+function loadScript(src){return new Promise(function(res,rej){var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
+function tryPair(pairs,idx){
+  if(idx>=pairs.length){document.getElementById('loading').innerHTML='<div style="color:#ff3355;padding:20px;font-family:monospace;font-size:12px;line-height:2"><b>Cannot load React</b><br/>Check internet and reload.</div>';return;}
+  msg.textContent='CDN '+(idx+1)+'/3...';
+  loadScript(pairs[idx][0]).then(function(){return loadScript(pairs[idx][1]);})
+    .then(function(){msg.textContent='Starting...';setTimeout(startApp,50);})
+    .catch(function(){tryPair(pairs,idx+1);});
+}
+tryPair(CDNS,0);
+function startApp(){
+var useState=React.useState,useEffect=React.useEffect,useRef=React.useRef,useCallback=React.useCallback,useMemo=React.useMemo;
+// React globals provided externally
+const UPSTOX_BASE = "https://api.upstox.com/v2";
+const CLAUDE_API = "https://api.anthropic.com/v1/messages";
+const fmtINR = n => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(n || 0);
+const fmt = (n, d = 2) => Number(n || 0).toFixed(d);
+const fmtK = n => Math.abs(n) >= 1e7 ? `${(n / 1e7).toFixed(1)}Cr` : Math.abs(n) >= 1e5 ? `${(n / 1e5).toFixed(1)}L` : Math.abs(n) >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${n}`;
+const ts = () => new Date().toLocaleTimeString("en-IN", { hour12: false });
+const LOG = { INFO: "info", WARN: "warn", ERROR: "error", TRADE: "trade", SIGNAL: "signal", AI: "ai", RISK: "risk" };
+function useLS(key, init) {
+    const [v, sv] = useState(() => { try {
+        const s = localStorage.getItem(key);
+        return s ? JSON.parse(s) : init;
+    }
+    catch (_a) {
+        return init;
+    } });
+    useEffect(() => { localStorage.setItem(key, JSON.stringify(v)); }, [key, v]);
+    return [v, sv];
+}
+function Spark({ data = [], color = "#00e87a", h = 28, w = 70 }) {
+    if (data.length < 2)
+        return null;
+    const mn = Math.min(...data), mx = Math.max(...data), rng = mx - mn || 1;
+    const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - mn) / rng) * (h - 2) + 1}`).join(" ");
+    return React.createElement("svg", { width: w, height: h, style: { display: "block", flexShrink: 0 } },
+        React.createElement("polyline", { points: pts, fill: "none", stroke: color, strokeWidth: "1.5", strokeLinejoin: "round" }));
+}
+// P&L Calendar + Monthly table
+function MonthlyChart({ tradeLog = [], dayLog = [], funds = null }) {
+    const MF = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+    const now = new Date();
+    const curMonth = now.getMonth();
+    const curYear = now.getFullYear();
+    const today = now.getDate();
+    // Calendar nav state
+    const [calYear, setCalYear] = useState(curYear);
+    const [calMonth, setCalMonth] = useState(curMonth);
+    // Days in displayed month
+    const firstDOW = new Date(calYear, calMonth, 1).getDay(); // 0=Sun
+    const daysInCal = new Date(calYear, calMonth + 1, 0).getDate();
+    // Build calendar cells (leading blanks + days)
+    const calCells = [];
+    for (let i = 0; i < firstDOW; i++)
+        calCells.push(null);
+    for (let d = 1; d <= daysInCal; d++) {
+        const dateKey = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        const rec = dayLog.find(r => r.date === dateKey) || { date: dateKey, pnl: 0, trades: 0 };
+        const isWeekend = (calCells.length) % 7 === 0 || (calCells.length) % 7 === 6;
+        calCells.push(Object.assign(Object.assign({}, rec), { day: d, isToday: d === today && calMonth === curMonth && calYear === curYear, isWeekend }));
+    }
+    // Summary stats for displayed month
+    const monthKey = `${calYear}-${String(calMonth + 1).padStart(2, "0")}`;
+    const monthRec = tradeLog.find(r => r.month === monthKey) || { trades: 0, pnl: 0, wins: 0, losses: 0 };
+    const profitDays = calCells.filter(c => c && (c.pnl || 0) > 0).length;
+    const lossDays = calCells.filter(c => c && (c.pnl || 0) < 0).length;
+    const monthPnl = calCells.reduce((s, c) => s + (c ? c.pnl || 0 : 0), 0);
+    // Table: Jan 2026 → current month
+    const tableMonths = [];
+    let ty = 2026, tm = 0; // Jan 2026
+    while (ty < curYear || (ty === curYear && tm <= curMonth)) {
+        const key = `${ty}-${String(tm + 1).padStart(2, "0")}`;
+        const rec = tradeLog.find(r => r.month === key) || { month: key, trades: 0, pnl: 0, wins: 0, losses: 0 };
+        tableMonths.push(Object.assign(Object.assign({}, rec), { full: MF[tm], yr: ty, isCurrent: tm === curMonth && ty === curYear }));
+        tm++;
+        if (tm > 11) {
+            tm = 0;
+            ty++;
+        }
+    }
+    // Reverse: newest first
+    tableMonths.reverse();
+    const prevCal = () => { if (calMonth === 0) {
+        setCalMonth(11);
+        setCalYear(y => y - 1);
+    }
+    else
+        setCalMonth(m => m - 1); };
+    const nextCal = () => {
+        const isAtCurrent = calMonth === curMonth && calYear === curYear;
+        if (isAtCurrent)
+            return;
+        if (calMonth === 11) {
+            setCalMonth(0);
+            setCalYear(y => y + 1);
+        }
+        else
+            setCalMonth(m => m + 1);
+    };
+    const fmtPnl = (p) => {
+        if (!p)
+            return null;
+        const abs = Math.abs(p);
+        const str = abs >= 1000 ? `₹${(abs / 1000).toFixed(1)}k` : `₹${abs}`;
+        return (p > 0 ? "+" : "-") + str;
+    };
+    return (React.createElement("div", null,
+        React.createElement("div", { className: "stitle" }, "\uD83D\uDCC5 P&L Calendar"),
+        React.createElement("div", { className: "card", style: { marginBottom: 8, padding: "10px 10px 6px" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
+                React.createElement("button", { onClick: prevCal, style: { background: "none", border: "1px solid var(--bdr2)", borderRadius: 6, color: "var(--text)", width: 28, height: 28, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" } }, "\u2039"),
+                React.createElement("div", { style: { fontFamily: "var(--sans)", fontWeight: 700, fontSize: 14, color: "var(--text)" } },
+                    MF[calMonth],
+                    " ",
+                    calYear),
+                React.createElement("button", { onClick: nextCal, style: { background: "none", border: "1px solid var(--bdr2)", borderRadius: 6, color: calMonth === curMonth && calYear === curYear ? "var(--muted)" : "var(--text)", width: 28, height: 28, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" } }, "\u203A")),
+            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 8 } },
+                React.createElement("div", { style: { flex: 1, background: "var(--s1)", borderRadius: 6, padding: "4px 6px", textAlign: "center" } },
+                    React.createElement("div", { style: { fontSize: 7, fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase" } }, "P&L"),
+                    React.createElement("div", { style: { fontSize: 12, fontFamily: "var(--mono)", fontWeight: 700, color: monthPnl > 0 ? "var(--g)" : monthPnl < 0 ? "var(--r)" : "var(--muted)" } }, fmtPnl(monthPnl) || "—")),
+                React.createElement("div", { style: { flex: 1, background: "var(--s1)", borderRadius: 6, padding: "4px 6px", textAlign: "center" } },
+                    React.createElement("div", { style: { fontSize: 7, fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase" } }, "Trades"),
+                    React.createElement("div", { style: { fontSize: 12, fontFamily: "var(--mono)", fontWeight: 700, color: "var(--b)" } }, monthRec.trades || "—")),
+                React.createElement("div", { style: { flex: 1, background: "rgba(0,232,122,0.08)", borderRadius: 6, padding: "4px 6px", textAlign: "center", border: "1px solid rgba(0,232,122,0.15)" } },
+                    React.createElement("div", { style: { fontSize: 7, fontFamily: "var(--mono)", color: "var(--g)", textTransform: "uppercase" } }, "Profit"),
+                    React.createElement("div", { style: { fontSize: 12, fontFamily: "var(--mono)", fontWeight: 700, color: "var(--g)" } },
+                        profitDays,
+                        "d")),
+                React.createElement("div", { style: { flex: 1, background: "rgba(255,51,85,0.08)", borderRadius: 6, padding: "4px 6px", textAlign: "center", border: "1px solid rgba(255,51,85,0.15)" } },
+                    React.createElement("div", { style: { fontSize: 7, fontFamily: "var(--mono)", color: "var(--r)", textTransform: "uppercase" } }, "Loss"),
+                    React.createElement("div", { style: { fontSize: 12, fontFamily: "var(--mono)", fontWeight: 700, color: "var(--r)" } },
+                        lossDays,
+                        "d"))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 3 } }, DAY_LABELS.map((d, i) => (React.createElement("div", { key: i, style: { textAlign: "center", fontSize: 9, fontFamily: "var(--mono)", color: i === 0 || i === 6 ? "var(--muted)" : "var(--muted2)", fontWeight: 600, padding: "2px 0" } }, d)))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 } }, calCells.map((cell, i) => {
+                if (!cell)
+                    return React.createElement("div", { key: i });
+                const pnl = cell.pnl || 0;
+                const hasData = pnl !== 0;
+                const isProfit = pnl > 0;
+                const isLoss = pnl < 0;
+                const bg = isProfit ? "rgba(0,232,122,0.13)" : isLoss ? "rgba(255,51,85,0.13)" : "transparent";
+                const border = cell.isToday ? "1px solid var(--g)" : hasData ? (isProfit ? "1px solid rgba(0,232,122,0.25)" : "1px solid rgba(255,51,85,0.25)") : "1px solid var(--bdr)";
+                const dayColor = cell.isToday ? "var(--g)" : cell.isWeekend ? "var(--muted)" : "var(--muted2)";
+                const pnlColor = isProfit ? "var(--g)" : isLoss ? "var(--r)" : "transparent";
+                return (React.createElement("div", { key: i, style: { background: bg, border, borderRadius: 5, padding: "3px 2px", minHeight: 40, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start" } },
+                    React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: dayColor, fontWeight: cell.isToday ? 700 : 400, lineHeight: 1.2 } }, cell.day),
+                    hasData && React.createElement("div", { style: { fontSize: 7, fontFamily: "var(--mono)", color: pnlColor, fontWeight: 700, lineHeight: 1.1, marginTop: 1, textAlign: "center", wordBreak: "break-all" } }, fmtPnl(pnl))));
+            }))),
+        React.createElement("div", { className: "card" },
+            React.createElement("div", { className: "klabel", style: { marginBottom: 8 } },
+                "MONTHLY BREAKDOWN \u2014 ",
+                new Date(2026, 0).getFullYear(),
+                " ONWARDS"),
+            React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11, tableLayout: "fixed" } },
+                React.createElement("colgroup", null,
+                    React.createElement("col", { style: { width: "30%" } }),
+                    React.createElement("col", { style: { width: "18%" } }),
+                    React.createElement("col", { style: { width: "28%" } }),
+                    React.createElement("col", { style: { width: "24%" } })),
+                React.createElement("thead", null,
+                    React.createElement("tr", { style: { borderBottom: "1px solid var(--bdr)" } }, ["Month", "Trades", "P&L", "W / L"].map(h => React.createElement("th", { key: h, style: { padding: "5px 4px", fontSize: 9, color: "var(--muted)", textTransform: "uppercase", textAlign: "center" } }, h)))),
+                React.createElement("tbody", null, tableMonths.map((m, i) => (React.createElement("tr", { key: i, style: { borderBottom: "1px solid #10101e", background: m.isCurrent ? "rgba(0,232,122,0.04)" : "transparent" } },
+                    React.createElement("td", { style: { padding: "6px 6px", color: m.isCurrent ? "var(--g)" : "var(--text)", fontWeight: m.isCurrent ? 700 : 400 } },
+                        m.full.slice(0, 3),
+                        " '",
+                        String(m.yr).slice(2),
+                        m.isCurrent ? " ◀" : ""),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", color: m.trades > 0 ? "var(--b)" : "var(--muted)" } }, m.trades || "—"),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", fontWeight: (m.pnl || 0) !== 0 ? 700 : 400,
+                            color: (m.pnl || 0) > 0 ? "var(--g)" : (m.pnl || 0) < 0 ? "var(--r)" : "var(--muted)" } }, fmtPnl(m.pnl) || "—"),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", color: m.trades > 0 ? "var(--text)" : "var(--muted)" } }, m.trades > 0 ? React.createElement("span", null,
+                        React.createElement("span", { style: { color: "var(--g)" } },
+                            m.wins || 0,
+                            "W"),
+                        " / ",
+                        React.createElement("span", { style: { color: "var(--r)" } },
+                            m.losses || 0,
+                            "L")) : "—")))))),
+            (() => {
+                var _a, _b;
+                const totalPnlAll = tableMonths.reduce((s, m) => s + (m.pnl || 0), 0);
+                const totalTradesAll = tableMonths.reduce((s, m) => s + m.trades, 0);
+                const totalWinsAll = tableMonths.reduce((s, m) => s + (m.wins || 0), 0);
+                // Capital = used_margin + available_margin as proxy for deployed capital
+                const capital = (((_a = funds === null || funds === void 0 ? void 0 : funds.equity) === null || _a === void 0 ? void 0 : _a.used_margin) || 0) + (((_b = funds === null || funds === void 0 ? void 0 : funds.equity) === null || _b === void 0 ? void 0 : _b.available_margin) || 0);
+                const roi = capital > 0 ? ((totalPnlAll / capital) * 100) : null;
+                // Current month P&L
+                const curRec = tableMonths.find(m => m.isCurrent) || { pnl: 0, trades: 0 };
+                const curDateStr = `${MF[curMonth].slice(0, 3)} ${today}, ${curYear}`;
+                return (React.createElement("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--bdr)" } },
+                    React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 } },
+                        "Summary as of ",
+                        curDateStr),
+                    React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 6 } },
+                        React.createElement("div", { style: { background: "var(--s1)", borderRadius: 8, padding: "10px 10px", border: `1px solid ${totalPnlAll > 0 ? "rgba(0,232,122,0.25)" : totalPnlAll < 0 ? "rgba(255,51,85,0.25)" : "var(--bdr)"}` } },
+                            React.createElement("div", { style: { fontSize: 8, fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 } }, "Total P&L (Jan '26 \u2192)"),
+                            React.createElement("div", { style: { fontSize: 18, fontFamily: "var(--mono)", fontWeight: 700, color: totalPnlAll > 0 ? "var(--g)" : totalPnlAll < 0 ? "var(--r)" : "var(--muted)", lineHeight: 1 } }, totalPnlAll !== 0 ? fmtPnl(totalPnlAll) : "₹0"),
+                            React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)", marginTop: 3 } },
+                                totalTradesAll,
+                                " trades \u00B7 ",
+                                totalWinsAll,
+                                "W/",
+                                totalTradesAll - totalWinsAll,
+                                "L")),
+                        React.createElement("div", { style: { background: "var(--s1)", borderRadius: 8, padding: "10px 10px", border: `1px solid ${(curRec.pnl || 0) > 0 ? "rgba(0,232,122,0.25)" : (curRec.pnl || 0) < 0 ? "rgba(255,51,85,0.25)" : "var(--bdr)"}` } },
+                            React.createElement("div", { style: { fontSize: 8, fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 } }, "This Month P&L"),
+                            React.createElement("div", { style: { fontSize: 18, fontFamily: "var(--mono)", fontWeight: 700, color: (curRec.pnl || 0) > 0 ? "var(--g)" : (curRec.pnl || 0) < 0 ? "var(--r)" : "var(--muted)", lineHeight: 1 } }, (curRec.pnl || 0) !== 0 ? fmtPnl(curRec.pnl) : "₹0"),
+                            React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)", marginTop: 3 } },
+                                curRec.trades || 0,
+                                " trades this month"))),
+                    React.createElement("div", { style: { background: totalPnlAll > 0 ? "rgba(0,232,122,0.06)" : totalPnlAll < 0 ? "rgba(255,51,85,0.06)" : "var(--s1)", border: `1px solid ${totalPnlAll > 0 ? "rgba(0,232,122,0.2)" : totalPnlAll < 0 ? "rgba(255,51,85,0.2)" : "var(--bdr)"}`, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: 8, fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 } }, "Return on Capital (ROI)"),
+                            React.createElement("div", { style: { fontSize: 22, fontFamily: "var(--mono)", fontWeight: 700, color: totalPnlAll > 0 ? "var(--g)" : totalPnlAll < 0 ? "var(--r)" : "var(--muted)" } }, roi !== null ? `${roi > 0 ? "+" : ""}${roi.toFixed(2)}%` : "—"),
+                            React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)", marginTop: 2 } }, capital > 0 ? `Capital: ₹${(capital / 1000).toFixed(1)}K` : "Connect Upstox for live capital")),
+                        React.createElement("div", { style: { textAlign: "right" } },
+                            React.createElement("div", { style: { fontSize: 8, fontFamily: "var(--mono)", color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 } }, "Win Rate"),
+                            React.createElement("div", { style: { fontSize: 22, fontFamily: "var(--mono)", fontWeight: 700, color: totalTradesAll > 0 && (totalWinsAll / totalTradesAll) >= 0.5 ? "var(--g)" : "var(--r)" } }, totalTradesAll > 0 ? `${Math.round((totalWinsAll / totalTradesAll) * 100)}%` : "—"),
+                            React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)", marginTop: 2 } }, "Overall win rate")))));
+            })())));
+}
+function ProgressBar({ pct, color }) {
+    return React.createElement("div", { style: { background: "#111125", borderRadius: 3, height: 5, overflow: "hidden", marginTop: 4 } },
+        React.createElement("div", { style: { height: "100%", width: `${Math.min(100, pct || 0)}%`, background: color, borderRadius: 3, transition: "width 0.4s" } }));
+}
+function AlgoTerminal() {
+    var _a, _b, _c, _d;
+    const [token, setToken] = useLS("up_tok", "");
+    const [apiKey, setApiKey] = useLS("up_key", "");
+    const [apiSecret, setApiSecret] = useLS("up_sec", "");
+    const [claudeKey, setClaudeKey] = useLS("cl_key", "");
+    const [authCode, setAuthCode] = useState("");
+    const [directToken, setDirectToken] = useState("");
+    const [connected, setConnected] = useState(false);
+    const [tab, setTab] = useState("terminal");
+    const [rightTab, setRightTab] = useState("chain");
+    // Market
+    const [niftyLtp, setNiftyLtp] = useState(0);
+    const [bnLtp, setBnLtp] = useState(0);
+    const [sensexLtp, setSensexLtp] = useState(0);
+    const [ltpHist, setLtpHist] = useState([]);
+    const [optChain, setOptChain] = useState([]);
+    const [expiry, setExpiry] = useLS("expiry", "");
+    const [expiryList, setExpiryList] = useState([]);
+    const [selIndex, setSelIndex] = useLS("idx", "NIFTY");
+    const [atmStrike, setAtmStrike] = useState(0);
+    const [pcr, setPcr] = useState(0);
+    const [activeCall, setActiveCall] = useState(null);
+    const [activePut, setActivePut] = useState(null);
+    const [supports, setSupports] = useState([]);
+    const [resistances, setResistances] = useState([]);
+    const [selStrike, setSelStrike] = useState(null);
+    // Portfolio
+    const [positions, setPositions] = useState([]);
+    const [orders, setOrders] = useState([]);
+    const [funds, setFunds] = useState(null);
+    // Strategy & bot
+    const [strategies, setStrategies] = useLS("strats_v3", []);
+    const [activeStratId, setActiveStratId] = useState(null);
+    const [tradeLog, setTradeLog] = useLS("trade_log_v1", []);
+    const [dayLog, setDayLog] = useLS("day_log_v1", []);
+    const [botRunning, setBotRunning] = useState(false);
+    const [botStatus, setBotStatus] = useState("idle");
+    const botRef = useRef(null);
+    const scanN = useRef(0);
+    // Risk
+    const [risk, setRisk] = useLS("risk_v3", {
+        dailyTradeLimit: 10, lossPerTrade: 2000, pointsPerTrade: 50,
+        dailyLossLimit: 10000, maxMarginUse: 70, minLiquidity: 500,
+        autoSquareOff: true, squareOffTime: "15:20"
+    });
+    const [tradesCount, setTradesCount] = useState(0);
+    const [dayLoss, setDayLoss] = useState(0);
+    // AI
+    const [aiMsgs, setAiMsgs] = useState([]);
+    const [aiInput, setAiInput] = useState("");
+    const [aiThinking, setAiThinking] = useState(false);
+    const [aiAlert, setAiAlert] = useState("");
+    const [aiAutoScan, setAiAutoScan] = useLS("ai_auto", false);
+    // Logs
+    const [logs, setLogs] = useState([{ ts: ts(), msg: "Terminal ready. Connect Upstox in Settings.", type: LOG.INFO, id: 1 }]);
+    const logRef = useRef(null);
+    const aiRef = useRef(null);
+    const addLog = useCallback((msg, type = LOG.INFO) => {
+        setLogs(p => [...p.slice(-299), { ts: ts(), msg, type, id: Date.now() + Math.random() }]);
+    }, []);
+    useEffect(() => { var _a; (_a = logRef.current) === null || _a === void 0 ? void 0 : _a.scrollTo(0, 9999); }, [logs]);
+    useEffect(() => { var _a; (_a = aiRef.current) === null || _a === void 0 ? void 0 : _a.scrollTo(0, 9999); }, [aiMsgs]);
+    // ── API helpers ──
+    // Backend server handles all Upstox calls (no CORS issues)
+    // Backend URL — set to your Render/Railway URL after deploying
+    const [backendUrl, setBackendUrl] = useLS("backend_url", "");
+    const apiCall = useCallback(async (endpoint, params = "", tkn = token) => {
+        if (!tkn)
+            return {};
+        const hdrs = { Authorization: `Bearer ${tkn}`, Accept: "application/json" };
+        const base = backendUrl || "";
+        if (!base) {
+            // No backend — try direct (may work for some endpoints)
+            try {
+                const url = `${UPSTOX_BASE}${endpoint}${params}`;
+                const r = await fetch(url, { headers: hdrs });
+                if (r.ok)
+                    return r.json();
+            }
+            catch (_a) { }
+            addLog("⚠️ No backend URL set. Set it in Settings → Market to get live data.", LOG.WARN);
+            return {};
+        }
+        // Use our backend server
+        const map = {
+            "/market-quote/ltp": "/api/ltp",
+            "/option/chain": "/api/chain",
+            "/option/contract": "/api/expiries",
+            "/portfolio/short-term-positions": "/api/positions",
+            "/order/retrieve-all": "/api/orders",
+            "/user/get-funds-and-margin": "/api/funds",
+            "/order/place": "/api/order",
+        };
+        const ep = Object.keys(map).find(k => endpoint.startsWith(k));
+        const backendEp = ep ? map[ep] : endpoint;
+        const r = await fetch(`${base}${backendEp}${params}`, { headers: hdrs });
+        if (!r.ok)
+            throw new Error(`Backend ${r.status}: ${r.statusText}`);
+        return r.json();
+    }, [token, backendUrl, addLog]);
+    const upGet = useCallback(async (path, tkn = token) => {
+        // Extract path and query separately
+        const [ep, ...rest] = path.split("?");
+        const qs = rest.length ? `?${rest.join("?")}` : "";
+        return apiCall(ep, qs, tkn);
+    }, [apiCall, token]);
+    const upPost = useCallback(async (path, body, tkn = token) => {
+        if (!tkn)
+            return {};
+        const hdrs = { Authorization: `Bearer ${tkn}`, "Content-Type": "application/json", Accept: "application/json" };
+        const base = backendUrl || "";
+        if (base) {
+            try {
+                const r = await fetch(`${base}/api/order`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+                if (r.ok)
+                    return r.json();
+            }
+            catch (_a) { }
+        }
+        // Fallback direct
+        try {
+            const r = await fetch(`${UPSTOX_BASE}${path}`, { method: "POST", headers: hdrs, body: JSON.stringify(body) });
+            if (r.ok)
+                return r.json();
+        }
+        catch (_b) { }
+        return { status: "sent" };
+    }, [token, backendUrl]);
+    // ── Auth ──
+    const authUrl = apiKey ? `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${apiKey}&redirect_uri=https://localhost` : null;
+    // Try token exchange (may be blocked by sandbox CORS)
+    const connect = async () => {
+        // Mode 1: Direct access token pasted
+        if (authCode.trim().length > 50 && !authCode.includes("code=") && !authCode.includes("localhost")) {
+            const t = authCode.trim();
+            setToken(t);
+            setConnected(true);
+            setAuthCode("");
+            addLog("✅ Access token saved — verifying...", LOG.INFO);
+            fetchAll(t);
+            fetchExpiries(t);
+            return;
+        }
+        // Mode 2: Extract code from redirect URL and exchange
+        if (!authCode.trim() || !apiKey || !apiSecret)
+            return addLog("Paste your access token or redirect URL", LOG.ERROR);
+        try {
+            const code = authCode.includes("code=")
+                ? (new URLSearchParams(authCode.split("?")[1] || authCode.replace("https://localhost?", ""))).get("code") || authCode.trim()
+                : authCode.trim();
+            addLog("Exchanging auth code...", LOG.INFO);
+            const r = await fetch(`${UPSTOX_BASE}/login/authorization/token`, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+                body: new URLSearchParams({ code, client_id: apiKey, client_secret: apiSecret, redirect_uri: "https://localhost", grant_type: "authorization_code" })
+            });
+            const d = await r.json();
+            if (d.access_token) {
+                setToken(d.access_token);
+                setConnected(true);
+                setAuthCode("");
+                addLog("✅ Connected to Upstox!", LOG.INFO);
+                fetchAll(d.access_token);
+                fetchExpiries(d.access_token);
+            }
+            else {
+                addLog("Token exchange blocked (sandbox CORS). Use Direct Token method below.", LOG.WARN);
+            }
+        }
+        catch (e) {
+            addLog("Exchange blocked by browser sandbox. Use Direct Token method instead.", LOG.WARN);
+        }
+    };
+    const connectWithToken = async (t) => {
+        if (!t || t.length < 20)
+            return addLog("Invalid token — paste full token starting with eyJ", LOG.ERROR);
+        setToken(t);
+        setConnected(true);
+        addLog("✅ Token saved — fetching market data...", LOG.INFO);
+        fetchLtp(t).then(() => {
+            fetchAll(t);
+            fetchExpiries(t).then(() => { if (expiry)
+                fetchChain(t); });
+        });
+    };
+    // ── Data fetchers ──
+    const fetchAll = useCallback(async (tkn = token) => {
+        try {
+            const [pos, ord, fund] = await Promise.all([
+                upGet("/portfolio/short-term-positions", tkn),
+                upGet("/order/retrieve-all", tkn),
+                upGet("/user/get-funds-and-margin", tkn)
+            ]);
+            if (pos.data)
+                setPositions(pos.data);
+            if (ord.data)
+                setOrders(Array.isArray(ord.data) ? ord.data : []);
+            if (fund.data)
+                setFunds(fund.data);
+        }
+        catch (e) {
+            addLog("Fetch error: " + e.message, LOG.WARN);
+        }
+    }, [token, upGet, addLog]);
+    const fetchLtp = useCallback(async (tkn = token) => {
+        var _a, _b, _c;
+        if (!tkn)
+            return;
+        try {
+            const keys = ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank", "BSE_INDEX|SENSEX"].join(",");
+            const d = await upGet(`/market-quote/ltp?instrument_key=${encodeURIComponent(keys)}&_t=${Date.now()}`, tkn);
+            if (d.data) {
+                const nf = ((_a = d.data["NSE_INDEX|Nifty 50"]) === null || _a === void 0 ? void 0 : _a.last_price) || 0;
+                const bn = ((_b = d.data["NSE_INDEX|Nifty Bank"]) === null || _b === void 0 ? void 0 : _b.last_price) || 0;
+                const sx = ((_c = d.data["BSE_INDEX|SENSEX"]) === null || _c === void 0 ? void 0 : _c.last_price) || 0;
+                if (nf) {
+                    setNiftyLtp(nf);
+                    setLtpHist(p => [...p.slice(-59), nf]);
+                }
+                if (bn)
+                    setBnLtp(bn);
+                if (sx)
+                    setSensexLtp(sx);
+                // ATM based on currently selected index
+                const curLtp = selIndex === "BANKNIFTY" ? bn : selIndex === "SENSEX" ? sx : nf;
+                if (curLtp > 0) {
+                    // Nifty/Sensex: round to 50, BankNifty: round to 100
+                    const step = selIndex === "BANKNIFTY" ? 100 : selIndex === "SENSEX" ? 100 : 50;
+                    setAtmStrike(Math.round(curLtp / step) * step);
+                }
+            }
+        }
+        catch (_d) { }
+    }, [token, upGet, selIndex]);
+    const fetchExpiries = useCallback(async (tkn = token) => {
+        try {
+            const key = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
+            const d = await upGet(`/option/contract?instrument_key=${encodeURIComponent(key)}`, tkn);
+            if (d.data) {
+                const dates = [...new Set(d.data.map(x => x.expiry))].sort();
+                setExpiryList(dates);
+                if (!expiry && dates.length)
+                    setExpiry(dates[0]);
+            }
+        }
+        catch (e) {
+            addLog("Expiry fetch error: " + e.message, LOG.WARN);
+        }
+    }, [token, selIndex, upGet, expiry, setExpiry, addLog]);
+    const fetchChain = useCallback(async (tkn = token) => {
+        var _a;
+        if (!tkn || !expiry)
+            return;
+        try {
+            const key = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
+            const d = await upGet(`/option/chain?instrument_key=${encodeURIComponent(key)}&expiry_date=${expiry}&_t=${Date.now()}`, tkn);
+            if (d.data) {
+                const chain = d.data;
+                setOptChain(chain);
+                // Set ATM from chain mid-point if not already set from LTP
+                if (!atmStrike && chain.length > 0) {
+                    const mid = ((_a = chain[Math.floor(chain.length / 2)]) === null || _a === void 0 ? void 0 : _a.strike_price) || 0;
+                    if (mid)
+                        setAtmStrike(mid);
+                    addLog(`ℹ️ ATM set from chain midpoint: ${mid}`, LOG.INFO);
+                }
+                const tCallOI = chain.reduce((s, r) => { var _a, _b; return s + (((_b = (_a = r.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0); }, 0);
+                const tPutOI = chain.reduce((s, r) => { var _a, _b; return s + (((_b = (_a = r.put_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0); }, 0);
+                if (tCallOI > 0)
+                    setPcr(tPutOI / tCallOI);
+                const byCV = [...chain].sort((a, b) => { var _a, _b, _c, _d; return (((_b = (_a = b.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.volume) || 0) - (((_d = (_c = a.call_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.volume) || 0); });
+                const byPV = [...chain].sort((a, b) => { var _a, _b, _c, _d; return (((_b = (_a = b.put_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.volume) || 0) - (((_d = (_c = a.put_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.volume) || 0); });
+                setActiveCall(byCV[0]);
+                setActivePut(byPV[0]);
+                const cOI = [...chain].sort((a, b) => { var _a, _b, _c, _d; return (((_b = (_a = b.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0) - (((_d = (_c = a.call_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.oi) || 0); });
+                const pOI = [...chain].sort((a, b) => { var _a, _b, _c, _d; return (((_b = (_a = b.put_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0) - (((_d = (_c = a.put_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.oi) || 0); });
+                setResistances(cOI.slice(0, 3).map(r => r.strike_price));
+                setSupports(pOI.slice(0, 3).map(r => r.strike_price));
+                addLog(`📊 Chain updated | PCR:${fmt(tPutOI / tCallOI, 2)} | CallOI:${fmtK(tCallOI)} | PutOI:${fmtK(tPutOI)}`, LOG.INFO);
+            }
+        }
+        catch (e) {
+            addLog("Chain error: " + e.message, LOG.WARN);
+        }
+    }, [token, expiry, selIndex, upGet, addLog]);
+    // Set connected immediately on mount if token exists
+    const [initialized, setInitialized] = useState(false);
+    useEffect(() => {
+        if (token && !initialized) {
+            setConnected(true);
+            setInitialized(true);
+            addLog("🔌 Token found — connecting...", LOG.INFO);
+            fetchLtp(token).then(() => {
+                fetchAll(token);
+                fetchExpiries(token).then(() => {
+                    // Chain fetched after expiry resolves
+                    if (expiry)
+                        fetchChain(token);
+                });
+            });
+        }
+    }, []); // eslint-disable-line
+    useEffect(() => {
+        if (connected && expiry) {
+            addLog(`🔄 Loading ${selIndex} chain for ${expiry}...`, LOG.INFO);
+            fetchLtp(token).then(() => fetchChain(token));
+        }
+    }, [expiry, selIndex, connected]); // eslint-disable-line
+    useEffect(() => {
+        if (!connected)
+            return;
+        const t = setInterval(() => {
+            fetchLtp();
+            fetchAll();
+            // Auto-refresh chain every 60s during market hours
+            const h = new Date().getHours(), m = new Date().getMinutes(), tot = h * 60 + m;
+            if (tot >= 555 && tot < 930)
+                fetchChain(); // pre-market
+            else if (tot >= 930 && tot < 930 + 375)
+                fetchChain(); // market open
+        }, 30000);
+        return () => clearInterval(t);
+    }, [connected, fetchLtp, fetchAll, fetchChain]);
+    // ── Risk check ──
+    const riskOk = useCallback(() => {
+        var _a, _b, _c;
+        if (tradesCount >= risk.dailyTradeLimit) {
+            addLog(`🚫 Daily trade limit (${risk.dailyTradeLimit}) reached`, LOG.RISK);
+            return false;
+        }
+        if (dayLoss >= risk.dailyLossLimit) {
+            addLog(`🚫 Daily loss limit ₹${risk.dailyLossLimit} hit — bot stopped`, LOG.RISK);
+            setBotRunning(false);
+            clearInterval(botRef.current);
+            return false;
+        }
+        const used = ((((_a = funds === null || funds === void 0 ? void 0 : funds.equity) === null || _a === void 0 ? void 0 : _a.used_margin) || 0) / ((((_b = funds === null || funds === void 0 ? void 0 : funds.equity) === null || _b === void 0 ? void 0 : _b.available_margin) || 1) + (((_c = funds === null || funds === void 0 ? void 0 : funds.equity) === null || _c === void 0 ? void 0 : _c.used_margin) || 0))) * 100;
+        if (used > risk.maxMarginUse) {
+            addLog(`🛡 Margin ${fmt(used)}% > ${risk.maxMarginUse}% limit — order blocked`, LOG.RISK);
+            return false;
+        }
+        return true;
+    }, [tradesCount, dayLoss, risk, funds, addLog]);
+    // ── Place order ──
+    const placeOrder = useCallback(async (instrument, side, qty, orderType = "MARKET", price = 0, trigger = 0) => {
+        var _a;
+        if (!riskOk())
+            return false;
+        addLog(`📤 ${side} ${qty}×${instrument} @${orderType}`, LOG.TRADE);
+        try {
+            const res = await upPost("/order/place", { quantity: qty, product: "I", validity: "DAY", price, instrument_token: instrument, order_type: orderType, transaction_type: side, disclosed_quantity: 0, trigger_price: trigger, is_amo: false });
+            if ((_a = res.data) === null || _a === void 0 ? void 0 : _a.order_id) {
+                addLog(`✅ Order: ${res.data.order_id}`, LOG.TRADE);
+                setTradesCount(c => c + 1);
+                // Record in trade log
+                const today = new Date();
+                const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+                const dayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+                setTradeLog(prev => {
+                    const existing = prev.find(m => m.month === monthKey);
+                    if (existing) {
+                        return prev.map(m => m.month === monthKey ? Object.assign(Object.assign({}, m), { trades: m.trades + 1 }) : m);
+                    }
+                    return [...prev, { month: monthKey, trades: 1, pnl: 0, wins: 0, losses: 0 }];
+                });
+                setDayLog(prev => {
+                    const existing = prev.find(d => d.date === dayKey);
+                    if (existing) {
+                        return prev.map(d => d.date === dayKey ? Object.assign(Object.assign({}, d), { trades: (d.trades || 0) + 1 }) : d);
+                    }
+                    return [...prev, { date: dayKey, trades: 1, pnl: 0 }];
+                });
+                fetchAll();
+                return true;
+            }
+            else {
+                addLog(`❌ ${JSON.stringify(res)}`, LOG.ERROR);
+                return false;
+            }
+        }
+        catch (e) {
+            addLog("Order error: " + e.message, LOG.ERROR);
+            return false;
+        }
+    }, [riskOk, upPost, fetchAll, addLog]);
+    // ── Bot scan ──
+    const runScan = useCallback(async () => {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+        const strat = strategies.find(s => s.id === activeStratId);
+        if (!strat)
+            return;
+        scanN.current += 1;
+        setBotStatus("scanning");
+        addLog(`🔍 Scan #${scanN.current} — ${strat.name}`, LOG.SIGNAL);
+        await fetchLtp();
+        await fetchChain();
+        const ltp = selIndex === "BANKNIFTY" ? bnLtp : niftyLtp;
+        const atm = optChain.find(r => r.strike_price === atmStrike) || optChain[Math.floor(optChain.length / 2)];
+        if (!atm) {
+            setBotStatus("idle");
+            return;
+        }
+        const callChOI = ((_b = (_a = atm.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi_day_change) || 0;
+        const putChOI = ((_d = (_c = atm.put_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.oi_day_change) || 0;
+        const callVol = ((_f = (_e = atm.call_options) === null || _e === void 0 ? void 0 : _e.market_data) === null || _f === void 0 ? void 0 : _f.volume) || 0;
+        const putVol = ((_h = (_g = atm.put_options) === null || _g === void 0 ? void 0 : _g.market_data) === null || _h === void 0 ? void 0 : _h.volume) || 0;
+        const nearSup = supports.some(s => Math.abs(ltp - s) < 50);
+        const nearRes = resistances.some(r => Math.abs(ltp - r) < 50);
+        const liq = callVol >= risk.minLiquidity && putVol >= risk.minLiquidity;
+        const pcrBull = pcr > 1.3, pcrBear = pcr < 0.7;
+        const oiBull = callChOI < 0 && putChOI > 0;
+        const oiBear = putChOI < 0 && callChOI > 0;
+        const bull = pcrBull && oiBull && (nearSup || (!nearRes)) && liq;
+        const bear = pcrBear && oiBear && (nearRes || (!nearSup)) && liq;
+        addLog(`PCR:${fmt(pcr, 2)} OI:${oiBull ? "↑" : "↓"} S/R:${nearSup ? "SUP" : nearRes ? "RES" : "MID"} Liq:${liq ? "✓" : "✗"}`, LOG.SIGNAL);
+        if (bull && strat.mode !== "SELL") {
+            setBotStatus("signal");
+            addLog(`🟢 BULLISH — buying CE ${atmStrike}`, LOG.SIGNAL);
+            if ((_j = atm.call_options) === null || _j === void 0 ? void 0 : _j.instrument_key)
+                await placeOrder(atm.call_options.instrument_key, "BUY", strat.qty || 1, "MARKET");
+        }
+        else if (bear && strat.mode !== "BUY") {
+            setBotStatus("signal");
+            addLog(`🔴 BEARISH — buying PE ${atmStrike}`, LOG.SIGNAL);
+            if ((_k = atm.put_options) === null || _k === void 0 ? void 0 : _k.instrument_key)
+                await placeOrder(atm.put_options.instrument_key, "BUY", strat.qty || 1, "MARKET");
+        }
+        else {
+            setBotStatus("idle");
+            addLog("⏸ No confluence", LOG.INFO);
+        }
+    }, [strategies, activeStratId, fetchLtp, fetchChain, selIndex, bnLtp, niftyLtp, optChain, atmStrike, supports, resistances, risk, pcr, placeOrder, addLog]);
+    const startBot = () => {
+        if (!connected)
+            return addLog("Connect to Upstox first", LOG.ERROR);
+        if (!activeStratId)
+            return addLog("Select a strategy first", LOG.ERROR);
+        addLog("🚀 Bot started", LOG.INFO);
+        setBotRunning(true);
+        scanN.current = 0;
+        botRef.current = setInterval(runScan, 30000);
+        runScan();
+    };
+    const stopBot = () => { clearInterval(botRef.current); setBotRunning(false); setBotStatus("idle"); addLog("⏹ Bot stopped", LOG.WARN); };
+    // ── AI ──
+    const callClaude = useCallback(async (userMsg) => {
+        var _a;
+        if (!claudeKey)
+            return "No Claude key. Add in Settings.";
+        setAiThinking(true);
+        try {
+            const pnl = positions.reduce((s, p) => s + (p.pnl || 0), 0);
+            const system = `You are an expert Indian F&O trading assistant. Current snapshot:
+- Nifty: ${niftyLtp} | BankNifty: ${bnLtp}
+- PCR: ${fmt(pcr, 2)} | ATM: ${atmStrike}
+- Resistances: ${resistances.join(",")} | Supports: ${supports.join(",")}
+- Most Active CE: ${(activeCall === null || activeCall === void 0 ? void 0 : activeCall.strike_price) || "N/A"} | Most Active PE: ${(activePut === null || activePut === void 0 ? void 0 : activePut.strike_price) || "N/A"}
+- Portfolio P&L: ${fmtINR(pnl)} | Day Loss: ${fmtINR(dayLoss)}
+- Trades today: ${tradesCount}/${risk.dailyTradeLimit}
+- Bot: ${botRunning ? "RUNNING" : "STOPPED"}
+Provide concise, actionable advice. Always protect margin. Flag if bot should pause for events.`;
+            const msgs = [...aiMsgs.slice(-10).map(m => ({ role: m.role, content: m.content })), { role: "user", content: userMsg }];
+            const r = await fetch(CLAUDE_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 800, system, messages: msgs, tools: [{ type: "web_search_20250305", name: "web_search" }] }) });
+            const d = await r.json();
+            const reply = ((_a = d.content) === null || _a === void 0 ? void 0 : _a.filter(c => c.type === "text").map(c => c.text).join("\n")) || "No response";
+            setAiMsgs(p => [...p, { role: "user", content: userMsg }, { role: "assistant", content: reply }]);
+            if (/pause|stop bot|high risk|geopolitical|rbi|fed|budget/i.test(reply))
+                setAiAlert("⚠️ AI flagged a risk event. Check AI chat.");
+            return reply;
+        }
+        catch (e) {
+            return "AI error: " + e.message;
+        }
+        finally {
+            setAiThinking(false);
+        }
+    }, [claudeKey, niftyLtp, bnLtp, pcr, atmStrike, resistances, supports, activeCall, activePut, positions, dayLoss, tradesCount, risk, botRunning, aiMsgs]);
+    const sendAi = async () => {
+        if (!aiInput.trim() || aiThinking)
+            return;
+        const q = aiInput;
+        setAiInput("");
+        addLog(`🤖 AI: ${q}`, LOG.AI);
+        await callClaude(q);
+    };
+    // Auto square-off
+    useEffect(() => {
+        if (!risk.autoSquareOff)
+            return;
+        const t = setInterval(() => {
+            const [h, m] = risk.squareOffTime.split(":").map(Number);
+            const n = new Date();
+            if (n.getHours() === h && n.getMinutes() === m) {
+                addLog("⏰ Auto square-off", LOG.RISK);
+                stopBot();
+                positions.filter(p => p.quantity !== 0).forEach(p => placeOrder(p.instrument_token, p.quantity > 0 ? "SELL" : "BUY", Math.abs(p.quantity), "MARKET"));
+            }
+        }, 30000);
+        return () => clearInterval(t);
+    }, [risk, positions, placeOrder, addLog]);
+    // Derived
+    const totalPnl = useMemo(() => positions.reduce((s, p) => s + (p.pnl || 0), 0), [positions]);
+    const openPos = useMemo(() => positions.filter(p => p.quantity !== 0), [positions]);
+    const usedM = funds ? ((((_a = funds.equity) === null || _a === void 0 ? void 0 : _a.used_margin) || 0) / Math.max(1, (((_b = funds.equity) === null || _b === void 0 ? void 0 : _b.available_margin) || 0) + (((_c = funds.equity) === null || _c === void 0 ? void 0 : _c.used_margin) || 0))) * 100 : 0;
+    const pcrColor = pcr > 1.2 ? "#00e87a" : pcr < 0.8 ? "#ff3355" : "#ffcc00";
+    const statusColor = { idle: "#444466", scanning: "#ffcc00", signal: "#00e87a", blocked: "#ff3355" }[botStatus];
+    const atmRows = useMemo(() => {
+        if (!optChain.length)
+            return [];
+        const idx = optChain.findIndex(r => r.strike_price >= atmStrike);
+        const mid = idx < 0 ? Math.floor(optChain.length / 2) : idx;
+        const s = Math.max(0, mid - 10);
+        return optChain.slice(s, s + 21); // 10 ITM + ATM + 10 OTM = 21
+    }, [optChain, atmStrike]);
+    // Strategy form
+    const emptyS = { id: "", name: "", mode: "BOTH", qty: 1, useATM: true, manualStrike: 0, tradingIndex: "NIFTY", tradingExpiry: "" };
+    const [newS, setNewS] = useState(Object.assign({}, emptyS));
+    const saveStrat = () => {
+        if (!newS.name.trim())
+            return;
+        const s = Object.assign(Object.assign({}, newS), { id: newS.id || String(Date.now()) });
+        setStrategies(p => newS.id ? p.map(x => x.id === s.id ? s : x) : [...p, s]);
+        setNewS(Object.assign({}, emptyS));
+        addLog(`✅ Strategy "${s.name}" saved`, LOG.INFO);
+    };
+    // ─── CSS ─────────────────────────────────────────────────────────────────
+    const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Outfit:wght@400;600;700;800;900&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;scrollbar-width:thin;scrollbar-color:#1e1e2e #09090f;}
+::-webkit-scrollbar{width:3px;height:3px;}::-webkit-scrollbar-track{background:#09090f;}::-webkit-scrollbar-thumb{background:#222238;}
+html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;height:100%;overflow:hidden;}
+:root{
+  --bg:#07070f;--s1:#0c0c1a;--s2:#101020;--s3:#141428;
+  --bdr:#1c1c30;--bdr2:#242438;
+  --g:#00e87a;--r:#ff3355;--b:#5b8fff;--y:#ffcc00;--p:#c084fc;
+  --mono:'IBM Plex Mono',monospace;--sans:'Outfit',sans-serif;
+  --text:#dde0ee;--muted:#4a4a6a;--muted2:#777799;
+}
+/* Layout */
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);}
+/* Top bar */
+.topbar{flex-shrink:0;background:var(--s1);border-bottom:1px solid var(--bdr);padding:0 10px;height:50px;display:flex;align-items:center;gap:8px;overflow:hidden;}
+.logo{font-weight:900;font-size:16px;flex-shrink:0;letter-spacing:-0.5px;}
+.logo em{color:var(--g);font-style:normal;}
+.logo sub{color:var(--b);font-size:10px;}
+.idx-chip{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:4px;border:1px solid;flex-shrink:0;}
+.pcr-chip{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:12px;flex-shrink:0;}
+.ml{margin-left:auto;}
+.dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.pulse{animation:p 2s infinite;}@keyframes p{0%,100%{opacity:1;}50%{opacity:0.2;}}
+.status-pill{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:4px;border:1px solid;text-transform:uppercase;flex-shrink:0;}
+/* Bottom nav - fixed at true bottom with safe area */
+.bottom-nav{flex-shrink:0;background:var(--s1);border-top:1px solid var(--bdr);display:flex;height:calc(56px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);}
+.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;color:var(--muted);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;transition:color 0.15s;border:none;background:none;padding:0 0 2px 0;}
+.nav-btn.active{color:var(--g);}
+.nav-btn .ico{font-size:18px;}
+/* Body */
+.body{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0;}
+.scroll{flex:1;overflow-y:auto;overflow-x:hidden;padding:10px;-webkit-overflow-scrolling:touch;}
+/* Cards */
+.card{background:var(--s2);border:1px solid var(--bdr);border-radius:10px;padding:12px;}
+.card+.card{margin-top:8px;}
+.kv .k{font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;}
+.kv .v{font-family:var(--mono);font-size:22px;font-weight:700;line-height:1;}
+.kv .sub{font-size:10px;color:var(--muted2);font-family:var(--mono);margin-top:2px;}
+.g{color:var(--g);}.r{color:var(--r);}.b{color:var(--b);}.y{color:var(--y);}.p{color:var(--p);}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;}
+/* Strictly equal columns */
+.eq2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.eq4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;}
+/* Compact KV for eq4 */
+.kv2 .klabel{font-family:var(--mono);font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;}
+.kv2 .vnum{font-family:var(--mono);font-size:15px;font-weight:700;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.kv2 .vsub{font-size:9px;color:var(--muted2);font-family:var(--mono);margin-top:2px;}
+.klabel{font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;}
+/* Section title */
+.stitle{font-size:13px;font-weight:700;margin:14px 0 8px;color:var(--text);}
+/* Table */
+.tbl{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px;}
+.tbl th{font-size:8px;text-transform:uppercase;color:var(--muted);padding:5px 4px;border-bottom:1px solid var(--bdr);text-align:right;background:var(--s1);}
+.tbl td{padding:4px;border-bottom:1px solid #10101e;text-align:right;cursor:pointer;}
+.tbl tr:hover td{background:#111124;}
+.tbl tr.atm td{background:rgba(0,232,122,0.05);}
+.tbl tr.atm .stk{color:var(--g);}
+.tbl .stk{text-align:center;font-weight:700;font-size:11px;background:var(--s2);padding:4px 6px;}
+.tbl .l{text-align:left;}
+.tbl .ch{color:var(--g);}
+.tbl .ph{color:var(--r);}
+/* Log */
+.logbox{background:#050510;border-radius:8px;overflow-y:auto;padding:8px;font-family:var(--mono);font-size:10px;height:160px;}
+.lr{display:flex;gap:6px;padding:2px 0;border-bottom:1px solid #0c0c1a;line-height:1.4;}
+.lt{color:var(--muted);flex-shrink:0;font-size:9px;}
+.l-info{color:var(--text);}.l-warn{color:var(--y);}.l-error{color:var(--r);}.l-trade{color:var(--b);}.l-signal{color:var(--p);}.l-ai{color:#f0abfc;}.l-risk{color:#fb923c;}
+/* Inputs */
+.field{margin-bottom:10px;}
+.lbl{font-size:10px;font-family:var(--mono);color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;}
+.inp{background:#080818;border:1px solid var(--bdr2);color:var(--text);font-family:var(--mono);font-size:12px;padding:9px 10px;border-radius:8px;width:100%;outline:none;-webkit-appearance:none;}
+.inp:focus{border-color:var(--b);}
+.sel{background:#080818;border:1px solid var(--bdr2);color:var(--text);font-family:var(--mono);font-size:12px;padding:9px 10px;border-radius:8px;width:100%;outline:none;-webkit-appearance:none;}
+/* Buttons */
+.btn{font-family:var(--sans);font-weight:700;font-size:13px;padding:10px 18px;border-radius:8px;border:none;cursor:pointer;transition:all 0.15s;width:100%;margin-top:6px;}
+.btn.pr{background:var(--g);color:#000;}
+.btn.dn{background:var(--r);color:#fff;}
+.btn.ol{background:none;border:1px solid var(--bdr2);color:var(--text);}
+.btn.sm{padding:6px 12px;font-size:11px;width:auto;margin-top:0;}
+.badge{font-size:9px;padding:2px 6px;border-radius:3px;font-family:var(--mono);font-weight:700;}
+.bg{background:rgba(0,232,122,0.15);color:var(--g);}
+.br{background:rgba(255,51,85,0.15);color:var(--r);}
+.bb{background:rgba(91,143,255,0.15);color:var(--b);}
+.by{background:rgba(255,204,0,0.15);color:var(--y);}
+/* Progress */
+.pbar{background:#111125;border-radius:3px;height:5px;overflow:hidden;margin-top:5px;}
+.pfill{height:100%;border-radius:3px;transition:width 0.4s;}
+/* AI chat */
+.aimsg{padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:11px;line-height:1.6;}
+.aimsg.u{background:rgba(91,143,255,0.1);border:1px solid rgba(91,143,255,0.2);color:var(--b);}
+.aimsg.a{background:var(--s2);border:1px solid var(--bdr2);color:var(--text);}
+.aimsg .role{font-size:8px;font-family:var(--mono);color:var(--muted);margin-bottom:3px;text-transform:uppercase;}
+/* Alert */
+.alert{padding:6px 10px;font-size:11px;font-family:var(--mono);background:rgba(255,204,0,0.1);border:1px solid rgba(255,204,0,0.3);color:var(--y);border-radius:6px;display:flex;align-items:center;gap:6px;margin-bottom:8px;}
+/* divider */
+.div{height:1px;background:var(--bdr);margin:10px 0;}
+.flex{display:flex;align-items:center;gap:6px;}
+.fbet{display:flex;justify-content:space-between;align-items:center;}
+.chip{font-family:var(--mono);font-size:9px;padding:2px 6px;border-radius:4px;background:var(--s3);border:1px solid var(--bdr2);color:var(--muted2);}
+/* Strategy card */
+.sc{background:var(--s2);border:1px solid var(--bdr);border-radius:8px;padding:12px;margin-bottom:8px;cursor:pointer;transition:border-color 0.2s;}
+.sc.sel{border-color:var(--b);}
+/* Bot control strip */
+.botstrip{flex-shrink:0;background:var(--s1);border-bottom:1px solid var(--bdr);padding:8px 10px;display:flex;align-items:center;gap:8px;}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.spin{animation:spin 1s linear infinite;display:inline-block;}
+/* tabs inside panel */
+.itabs{display:flex;gap:0;border-bottom:1px solid var(--bdr);margin-bottom:10px;}
+.itab{flex:1;padding:8px 4px;text-align:center;font-size:10px;font-weight:700;font-family:var(--mono);color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:all 0.15s;text-transform:uppercase;}
+.itab.a{color:var(--g);border-color:var(--g);}
+`;
+    // ─── Pages ────────────────────────────────────────────────────────────────
+    const [settingsTab, setSettingsTab] = useState("auth");
+    const [chainView, setChainView] = useState("chain"); // chain | ai
+    const terminal = (React.createElement("div", null,
+        aiAlert && React.createElement("div", { className: "alert" },
+            aiAlert,
+            React.createElement("button", { onClick: () => setAiAlert(""), style: { marginLeft: "auto", background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1 } }, "\u00D7")),
+        React.createElement("div", { className: "stitle", style: { marginTop: 0 } }, "\uD83D\uDCCA Today's P&L Snapshot"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 5, marginBottom: 8 } }, [
+            { k: "Day P&L", v: fmtINR(totalPnl), c: totalPnl >= 0 ? "var(--g)" : "var(--r)", s: `${openPos.length} open`, p: null },
+            { k: "Day Loss", v: fmtINR(dayLoss), c: dayLoss > 0 ? "var(--r)" : "var(--g)", s: null, p: Math.min(100, (dayLoss / Math.max(1, risk.dailyLossLimit)) * 100), pc: "var(--r)" },
+            { k: "Margin", v: `${fmt(usedM, 0)}%`, c: usedM > 70 ? "var(--r)" : usedM > 50 ? "var(--y)" : "var(--g)", s: null, p: Math.min(100, usedM), pc: usedM > 70 ? "var(--r)" : usedM > 50 ? "var(--y)" : "var(--g)" },
+            { k: "Trades", v: `${tradesCount}/${risk.dailyTradeLimit}`, c: "var(--b)", s: null, p: (tradesCount / Math.max(1, risk.dailyTradeLimit)) * 100, pc: "var(--b)" },
+        ].map(({ k, v, c, s, p, pc }) => (React.createElement("div", { key: k, style: { background: "var(--s2)", border: "1px solid var(--bdr)", borderRadius: 8, padding: "8px 5px", height: 68, display: "flex", flexDirection: "column", justifyContent: "space-between", overflow: "hidden" } },
+            React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 7, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px", lineHeight: 1 } }, k),
+            React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, color: c, lineHeight: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, v),
+            s ? React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 8, color: "var(--muted2)" } }, s) : null,
+            p != null ? React.createElement("div", { style: { background: "#111125", borderRadius: 2, height: 3 } },
+                React.createElement("div", { style: { height: "100%", width: `${p}%`, background: pc, borderRadius: 2, transition: "width 0.4s" } })) : null)))),
+        React.createElement(MonthlyChart, { tradeLog: tradeLog, dayLog: dayLog, funds: funds }),
+        React.createElement("div", { className: "stitle fbet", style: { marginTop: 12 } },
+            React.createElement("span", null, "\uD83E\uDD16 AI Intel"),
+            React.createElement("span", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)" } }, claudeKey ? "key set" : "add key in Settings")),
+        React.createElement("div", { ref: aiRef, style: { maxHeight: 180, overflowY: "auto", marginBottom: 8 } },
+            aiMsgs.length === 0 && (React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 5 } }, ["What does the PCR signal today?", "Any events affecting Nifty?", "Should I pause the bot?", "Best ATM entry now?"].map(q => (React.createElement("div", { key: q, onClick: () => setAiInput(q), style: { background: "var(--s2)", border: "1px solid var(--bdr2)", borderRadius: 6, padding: "7px 10px", cursor: "pointer", fontSize: 11, color: "var(--b)", fontFamily: "var(--mono)" } }, q))))),
+            aiMsgs.map((m, i) => (React.createElement("div", { key: i, className: `aimsg ${m.role === "user" ? "u" : "a"}` },
+                React.createElement("div", { className: "role" }, m.role === "user" ? "You" : "Claude AI"),
+                React.createElement("div", { style: { whiteSpace: "pre-wrap" } }, m.content)))),
+            aiThinking && React.createElement("div", { className: "aimsg a" },
+                React.createElement("div", { className: "role" }, "Claude AI"),
+                React.createElement("div", { style: { color: "var(--muted)" } }, "Analyzing..."))),
+        React.createElement("div", { className: "flex", style: { marginBottom: 12 } },
+            React.createElement("input", { className: "inp", value: aiInput, onChange: e => setAiInput(e.target.value), onKeyDown: e => e.key === "Enter" && sendAi(), placeholder: "Ask AI about markets...", style: { flex: 1, fontSize: 12 } }),
+            React.createElement("button", { className: "btn pr sm", onClick: sendAi, disabled: aiThinking, style: { flexShrink: 0, minWidth: 40 } }, "\u2192")),
+        openPos.length > 0 && (React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "stitle" }, "Open Positions"),
+            React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11, tableLayout: "fixed" } },
+                React.createElement("colgroup", null,
+                    React.createElement("col", { style: { width: "35%" } }),
+                    React.createElement("col", { style: { width: "13%" } }),
+                    React.createElement("col", { style: { width: "17%" } }),
+                    React.createElement("col", { style: { width: "17%" } }),
+                    React.createElement("col", { style: { width: "18%" } })),
+                React.createElement("thead", null,
+                    React.createElement("tr", { style: { background: "var(--s1)" } },
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--muted)", textAlign: "left", borderBottom: "1px solid var(--bdr)", textTransform: "uppercase" } }, "Symbol"),
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--muted)", textAlign: "center", borderBottom: "1px solid var(--bdr)", textTransform: "uppercase" } }, "Qty"),
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--muted)", textAlign: "center", borderBottom: "1px solid var(--bdr)", textTransform: "uppercase" } }, "Avg"),
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--muted)", textAlign: "center", borderBottom: "1px solid var(--bdr)", textTransform: "uppercase" } }, "LTP"),
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--muted)", textAlign: "right", borderBottom: "1px solid var(--bdr)", textTransform: "uppercase" } }, "P&L"))),
+                React.createElement("tbody", null, openPos.map((p, i) => (React.createElement("tr", { key: i, style: { borderBottom: "1px solid #10101e" } },
+                    React.createElement("td", { style: { padding: "6px 4px", fontWeight: 700, fontSize: 10, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, p.tradingsymbol),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center" } }, p.quantity),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center" } }, fmt(p.average_price)),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center" } }, fmt(p.last_price)),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "right", color: p.pnl >= 0 ? "var(--g)" : "var(--r)", fontWeight: 700 } }, fmtINR(p.pnl))))))))),
+        React.createElement("div", { className: "stitle fbet", style: { marginTop: 12 } },
+            React.createElement("span", null, "Activity Log"),
+            React.createElement("button", { className: "btn ol sm", onClick: () => setLogs([]) }, "Clear")),
+        React.createElement("div", { className: "logbox", ref: logRef }, logs.map(l => React.createElement("div", { key: l.id, className: "lr" },
+            React.createElement("span", { className: "lt" }, l.ts),
+            React.createElement("span", { className: `l-${l.type}` }, l.msg))))));
+    const ordersPage = (React.createElement("div", null,
+        React.createElement("div", { className: "fbet", style: { marginBottom: 8 } },
+            React.createElement("div", { className: "stitle", style: { margin: 0 } }, "Order Book"),
+            React.createElement("button", { className: "btn ol sm", onClick: () => fetchAll() }, "\u21BB Refresh")),
+        React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11, tableLayout: "fixed" } },
+            React.createElement("colgroup", null,
+                React.createElement("col", { style: { width: "38%" } }),
+                React.createElement("col", { style: { width: "14%" } }),
+                React.createElement("col", { style: { width: "12%" } }),
+                React.createElement("col", { style: { width: "16%" } }),
+                React.createElement("col", { style: { width: "20%" } })),
+            React.createElement("thead", null,
+                React.createElement("tr", { style: { background: "var(--s1)" } }, ["Symbol", "Side", "Qty", "Price", "Status"].map((h, i) => React.createElement("th", { key: h, style: { padding: "5px 4px", fontSize: 9, color: "var(--muted)", textAlign: i === 0 ? "left" : "center", borderBottom: "1px solid var(--bdr)", textTransform: "uppercase" } }, h)))),
+            React.createElement("tbody", null,
+                orders.length === 0 && React.createElement("tr", null,
+                    React.createElement("td", { colSpan: 5, style: { textAlign: "center", color: "var(--muted)", padding: 24, fontSize: 11 } }, "No orders today")),
+                orders.map((o, i) => (React.createElement("tr", { key: i, style: { borderBottom: "1px solid #10101e" } },
+                    React.createElement("td", { style: { padding: "6px 4px", fontWeight: 700, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, o.tradingsymbol),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center" } },
+                        React.createElement("span", { className: `badge ${o.transaction_type === "BUY" ? "bg" : "br"}` }, o.transaction_type)),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center" } }, o.quantity),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center" } }, fmt(o.price)),
+                    React.createElement("td", { style: { padding: "6px 4px", textAlign: "center" } },
+                        React.createElement("span", { className: `badge ${o.status === "complete" ? "bg" : o.status === "rejected" ? "br" : "bb"}` }, o.status)))))))));
+    const stratPage = (React.createElement("div", null,
+        React.createElement("div", { className: "stitle fbet" },
+            React.createElement("span", null, "\uD83D\uDCCA Option Chain"),
+            React.createElement("button", { className: "btn ol sm", onClick: () => { fetchLtp(); fetchChain(); } }, "\u21BB")),
+        (() => {
+            const curLtp = selIndex === "BANKNIFTY" ? bnLtp : selIndex === "SENSEX" ? sensexLtp : niftyLtp;
+            return (React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 10, marginBottom: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
+                React.createElement("span", { style: { color: "var(--text)", fontWeight: 700 } }, selIndex),
+                React.createElement("span", { style: { color: curLtp > 0 ? "var(--g)" : "var(--muted)", fontWeight: 700, fontSize: 13 } }, curLtp > 0 ? fmt(curLtp, 2) : "—"),
+                React.createElement("span", { style: { color: "var(--muted)" } }, "|"),
+                React.createElement("span", { style: { color: "var(--muted)" } }, "Exp:"),
+                React.createElement("span", { style: { color: "var(--y)" } }, expiry || "not set"),
+                React.createElement("span", { style: { color: "var(--muted)" } }, "|"),
+                React.createElement("span", { style: { color: "var(--muted)" } }, "PCR:"),
+                React.createElement("span", { style: { color: pcrColor, fontWeight: 700 } }, pcr > 0 ? fmt(pcr, 2) : "—"),
+                React.createElement("span", { style: { color: "var(--muted)" } }, "|"),
+                React.createElement("span", { style: { color: "var(--muted)" } }, "ATM:"),
+                React.createElement("span", { style: { color: "var(--g)", fontWeight: 700 } }, atmStrike || "—")));
+        })(),
+        React.createElement("div", { style: { marginBottom: 12 } },
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 0, marginBottom: 0 } },
+                React.createElement("div", { style: { textAlign: "center", padding: "4px", fontSize: 9, fontFamily: "var(--mono)", color: "var(--g)", fontWeight: 700, background: "rgba(0,232,122,0.06)", borderRadius: "6px 0 0 0" } }, "\u2501\u2501 CALL \u2501\u2501"),
+                React.createElement("div", { style: { textAlign: "center", padding: "4px 8px", fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted)", background: "var(--s2)", fontWeight: 700 } }, "STRIKE"),
+                React.createElement("div", { style: { textAlign: "center", padding: "4px", fontSize: 9, fontFamily: "var(--mono)", color: "var(--r)", fontWeight: 700, background: "rgba(255,51,85,0.06)", borderRadius: "0 6px 0 0" } }, "\u2501\u2501 PUT \u2501\u2501")),
+            React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11, tableLayout: "fixed" } },
+                React.createElement("colgroup", null,
+                    React.createElement("col", { style: { width: "20%" } }),
+                    React.createElement("col", { style: { width: "20%" } }),
+                    React.createElement("col", { style: { width: "20%" } }),
+                    React.createElement("col", { style: { width: "20%" } }),
+                    React.createElement("col", { style: { width: "20%" } })),
+                React.createElement("thead", null,
+                    React.createElement("tr", { style: { background: "var(--s1)" } },
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--g)", fontWeight: 400, textTransform: "uppercase", textAlign: "center", borderBottom: "1px solid var(--bdr)" } }, "LTP"),
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--g)", fontWeight: 400, textTransform: "uppercase", textAlign: "center", borderBottom: "1px solid var(--bdr)" } }, "OI"),
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", textAlign: "center", borderBottom: "1px solid var(--bdr)", background: "var(--s2)" } }, "STRIKE"),
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--r)", fontWeight: 400, textTransform: "uppercase", textAlign: "center", borderBottom: "1px solid var(--bdr)" } }, "OI"),
+                        React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--r)", fontWeight: 400, textTransform: "uppercase", textAlign: "center", borderBottom: "1px solid var(--bdr)" } }, "LTP"))),
+                React.createElement("tbody", null,
+                    atmRows.length === 0 && React.createElement("tr", null,
+                        React.createElement("td", { colSpan: 5, style: { textAlign: "center", color: "var(--muted)", padding: 20, fontSize: 11 } }, "Load chain in Settings \u2192 Market")),
+                    atmRows.map((row, i) => {
+                        var _a, _b, _c, _d, _e, _f, _g, _h;
+                        const isAtm = row.strike_price === atmStrike;
+                        const isSel = (selStrike === null || selStrike === void 0 ? void 0 : selStrike.strike_price) === row.strike_price;
+                        const isRes = resistances.includes(row.strike_price);
+                        const isSup = supports.includes(row.strike_price);
+                        const rowBg = isAtm ? "rgba(0,232,122,0.07)" : isSel ? "rgba(91,143,255,0.08)" : "transparent";
+                        const strikeBg = isAtm ? "rgba(0,232,122,0.15)" : isRes ? "rgba(255,51,85,0.1)" : isSup ? "rgba(0,232,122,0.1)" : "var(--s2)";
+                        const strikeColor = isAtm ? "var(--g)" : isRes ? "var(--r)" : isSup ? "var(--g)" : "var(--text)";
+                        return (React.createElement("tr", { key: i, onClick: () => setSelStrike(isSel ? null : row), style: { background: rowBg, cursor: "pointer" } },
+                            React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", color: "var(--g)", fontWeight: isAtm ? 700 : 400, borderBottom: "1px solid #10101e" } }, fmt(((_b = (_a = row.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.ltp) || 0)),
+                            React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", color: "rgba(0,232,122,0.6)", borderBottom: "1px solid #10101e" } }, fmtK(((_d = (_c = row.call_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.oi) || 0)),
+                            React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", fontWeight: 700, fontSize: isAtm ? 13 : 11, background: strikeBg, color: strikeColor, borderBottom: "1px solid #10101e", borderLeft: "1px solid var(--bdr)", borderRight: "1px solid var(--bdr)" } },
+                                row.strike_price,
+                                isAtm ? " ◆" : isRes ? " R" : isSup ? " S" : ""),
+                            React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", color: "rgba(255,51,85,0.6)", borderBottom: "1px solid #10101e" } }, fmtK(((_f = (_e = row.put_options) === null || _e === void 0 ? void 0 : _e.market_data) === null || _f === void 0 ? void 0 : _f.oi) || 0)),
+                            React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", color: "var(--r)", fontWeight: isAtm ? 700 : 400, borderBottom: "1px solid #10101e" } }, fmt(((_h = (_g = row.put_options) === null || _g === void 0 ? void 0 : _g.market_data) === null || _h === void 0 ? void 0 : _h.ltp) || 0))));
+                    }))),
+            selStrike && (React.createElement("div", { style: { background: "var(--s2)", border: "1px solid rgba(91,143,255,0.25)", borderRadius: 8, padding: 10, marginTop: 6 } },
+                React.createElement("div", { style: { fontSize: 9, color: "var(--b)", fontFamily: "var(--mono)", marginBottom: 6, fontWeight: 700 } },
+                    "GREEKS \u2014 ",
+                    selStrike.strike_price,
+                    " ",
+                    React.createElement("span", { style: { color: "var(--g)" } }, "CE"),
+                    " / ",
+                    React.createElement("span", { style: { color: "var(--r)" } }, "PE")),
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 } }, ["delta", "gamma", "theta", "vega"].map(g => {
+                    var _a, _b, _c, _d;
+                    return (React.createElement("div", { key: g, style: { textAlign: "center" } },
+                        React.createElement("div", { style: { fontSize: 8, color: "var(--muted)", fontFamily: "var(--mono)", textTransform: "uppercase", marginBottom: 2 } }, g),
+                        React.createElement("div", { style: { fontSize: 11, fontFamily: "var(--mono)", color: "var(--g)", fontWeight: 600 } }, fmt((_b = (_a = selStrike.call_options) === null || _a === void 0 ? void 0 : _a.option_greeks) === null || _b === void 0 ? void 0 : _b[g], 3)),
+                        React.createElement("div", { style: { fontSize: 11, fontFamily: "var(--mono)", color: "var(--r)", fontWeight: 600 } }, fmt((_d = (_c = selStrike.put_options) === null || _c === void 0 ? void 0 : _c.option_greeks) === null || _d === void 0 ? void 0 : _d[g], 3))));
+                }))))),
+        React.createElement("div", { className: "div" }),
+        (supports.length > 0 || resistances.length > 0) && (React.createElement("div", null,
+            React.createElement("div", { className: "stitle" }, "\uD83D\uDCD0 Key Levels (Max OI)"),
+            React.createElement("div", { className: "g2", style: { marginBottom: 8 } },
+                React.createElement("div", { className: "card", style: { borderColor: "rgba(0,232,122,0.2)" } },
+                    React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--g)", marginBottom: 6, fontWeight: 700 } }, "\u25B2 SUPPORT (Put OI)"),
+                    supports.map((s, i) => React.createElement("div", { key: i, style: { fontFamily: "var(--mono)", fontSize: 15, fontWeight: 700, color: "var(--g)", lineHeight: 1.8 } }, s))),
+                React.createElement("div", { className: "card", style: { borderColor: "rgba(255,51,85,0.2)" } },
+                    React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--r)", marginBottom: 6, fontWeight: 700 } }, "\u25BC RESISTANCE (Call OI)"),
+                    resistances.map((r, i) => React.createElement("div", { key: i, style: { fontFamily: "var(--mono)", fontSize: 15, fontWeight: 700, color: "var(--r)", lineHeight: 1.8 } }, r)))))),
+        React.createElement("div", { className: "stitle" }, "New Strategy"),
+        React.createElement("div", { className: "card" },
+            React.createElement("div", { className: "field" },
+                React.createElement("div", { className: "lbl" }, "Name"),
+                React.createElement("input", { className: "inp", value: newS.name, onChange: e => setNewS(s => (Object.assign(Object.assign({}, s), { name: e.target.value }))), placeholder: "e.g. Nifty ATM Scalper" })),
+            React.createElement("div", { className: "g2" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("div", { className: "lbl" }, "Mode"),
+                    React.createElement("select", { className: "sel", value: newS.mode, onChange: e => setNewS(s => (Object.assign(Object.assign({}, s), { mode: e.target.value }))) },
+                        React.createElement("option", { value: "BOTH" }, "CE + PE"),
+                        React.createElement("option", { value: "BUY" }, "CE only"),
+                        React.createElement("option", { value: "SELL" }, "PE only"))),
+                React.createElement("div", { className: "field" },
+                    React.createElement("div", { className: "lbl" }, "Qty (lots)"),
+                    React.createElement("input", { className: "inp", type: "number", min: 1, value: newS.qty, onChange: e => setNewS(s => (Object.assign(Object.assign({}, s), { qty: Number(e.target.value) }))) }))),
+            React.createElement("div", { className: "field" },
+                React.createElement("div", { className: "lbl" }, "Strike"),
+                React.createElement("div", { className: "flex" },
+                    React.createElement("label", { className: "flex", style: { gap: 4, cursor: "pointer" } },
+                        React.createElement("input", { type: "radio", checked: newS.useATM, onChange: () => setNewS(s => (Object.assign(Object.assign({}, s), { useATM: true }))) }),
+                        React.createElement("span", { style: { fontSize: 12 } }, "Auto ATM")),
+                    React.createElement("label", { className: "flex", style: { gap: 4, cursor: "pointer" } },
+                        React.createElement("input", { type: "radio", checked: !newS.useATM, onChange: () => setNewS(s => (Object.assign(Object.assign({}, s), { useATM: false }))) }),
+                        React.createElement("span", { style: { fontSize: 12 } }, "Manual")),
+                    !newS.useATM && React.createElement("input", { className: "inp", type: "number", value: newS.manualStrike, onChange: e => setNewS(s => (Object.assign(Object.assign({}, s), { manualStrike: Number(e.target.value) }))), style: { width: 90 } }))),
+            React.createElement("div", { className: "g2" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("div", { className: "lbl" }, "Trade Index"),
+                    React.createElement("select", { className: "sel", value: newS.tradingIndex || "NIFTY", onChange: e => setNewS(s => (Object.assign(Object.assign({}, s), { tradingIndex: e.target.value, tradingExpiry: "" }))) },
+                        React.createElement("option", { value: "NIFTY" }, "Nifty 50"),
+                        React.createElement("option", { value: "BANKNIFTY" }, "Bank Nifty"),
+                        React.createElement("option", { value: "SENSEX" }, "Sensex"))),
+                React.createElement("div", { className: "field" },
+                    React.createElement("div", { className: "lbl" }, "Expiry"),
+                    React.createElement("select", { className: "sel", value: newS.tradingExpiry || "", onChange: e => setNewS(s => (Object.assign(Object.assign({}, s), { tradingExpiry: e.target.value }))) },
+                        React.createElement("option", { value: "" }, "Auto (nearest)"),
+                        expiryList.map(d => React.createElement("option", { key: d, value: d }, d))))),
+            React.createElement("div", { style: { background: "var(--s1)", border: "1px solid var(--bdr)", borderRadius: 8, padding: 10, marginBottom: 10 } },
+                React.createElement("div", { style: { fontSize: 9, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 6 } }, "AUTO SIGNAL CONDITIONS"),
+                [["PCR", "Bull >1.3 | Bear <0.7"], ["OI Flow", "Call OI↓ + Put OI↑ = Bull"], ["S/R Zones", "Max OI = key level"], ["Liquidity", "Volume > min threshold"], ["Margin", "Block if % exceeded"]].map(([k, v]) => (React.createElement("div", { key: k, style: { fontSize: 10, marginBottom: 4, display: "flex", gap: 8 } },
+                    React.createElement("span", { style: { color: "var(--g)", fontFamily: "var(--mono)", width: 70, flexShrink: 0 } }, k),
+                    React.createElement("span", { style: { color: "var(--muted2)" } }, v))))),
+            React.createElement("button", { className: "btn pr", onClick: saveStrat }, "\uD83D\uDCBE Save Strategy")),
+        React.createElement("div", { className: "stitle" }, "Saved Strategies"),
+        strategies.length === 0 && React.createElement("div", { className: "card", style: { color: "var(--muted)", fontSize: 12 } }, "No strategies yet."),
+        strategies.map(s => (React.createElement("div", { key: s.id, className: `sc ${activeStratId === s.id ? "sel" : ""}`, onClick: () => setActiveStratId(s.id) },
+            React.createElement("div", { className: "fbet" },
+                React.createElement("span", { style: { fontWeight: 700, fontSize: 14 } }, s.name),
+                React.createElement("div", { className: "flex" },
+                    React.createElement("span", { className: `badge ${s.mode === "SELL" ? "br" : "bg"}` }, s.mode),
+                    activeStratId === s.id && React.createElement("span", { className: "badge bb" }, "ACTIVE"))),
+            React.createElement("div", { style: { fontSize: 10, color: "var(--muted2)", fontFamily: "var(--mono)", marginTop: 4 } },
+                s.tradingIndex || "NIFTY",
+                " \u00B7 ",
+                s.qty,
+                " lot \u00B7 ",
+                s.useATM ? "Auto ATM" : "Strike " + s.manualStrike,
+                " \u00B7 ",
+                s.tradingExpiry || "Auto expiry"),
+            React.createElement("div", { className: "flex", style: { marginTop: 8 } },
+                React.createElement("button", { className: "btn ol sm", onClick: e => { e.stopPropagation(); setNewS(Object.assign({}, s)); } }, "\u270F\uFE0F Edit"),
+                React.createElement("button", { className: "btn sm", style: { background: "rgba(255,51,85,0.1)", color: "var(--r)", border: "1px solid rgba(255,51,85,0.2)" }, onClick: e => { e.stopPropagation(); setStrategies(p => p.filter(x => x.id !== s.id)); if (activeStratId === s.id) {
+                        setActiveStratId(null);
+                        stopBot();
+                    } } }, "\uD83D\uDDD1")))))));
+    const riskPage = (React.createElement("div", null,
+        React.createElement("div", { className: "stitle" }, "\uD83D\uDEE1 Risk Controls"),
+        React.createElement("div", { className: "card" },
+            [
+                ["dailyTradeLimit", "Daily Trade Limit", "Max orders allowed per day"],
+                ["lossPerTrade", "Max Loss Per Trade (₹)", "SL amount per individual trade"],
+                ["pointsPerTrade", "Points Target Per Trade", "Nifty point target per trade"],
+                ["dailyLossLimit", "Daily Loss Limit (₹)", "Bot stops automatically when hit"],
+                ["maxMarginUse", "Max Margin Usage (%)", "Orders blocked above this %"],
+                ["minLiquidity", "Min Volume (Liquidity)", "Minimum volume required for entry"],
+            ].map(([k, label, hint]) => (React.createElement("div", { className: "field", key: k },
+                React.createElement("div", { className: "lbl" }, label),
+                React.createElement("input", { className: "inp", type: "number", value: risk[k], onChange: e => setRisk(r => (Object.assign(Object.assign({}, r), { [k]: Number(e.target.value) }))) }),
+                React.createElement("div", { style: { fontSize: 9, color: "var(--muted)", fontFamily: "var(--mono)", marginTop: 2 } }, hint)))),
+            React.createElement("div", { className: "div" }),
+            React.createElement("div", { className: "field" },
+                React.createElement("div", { className: "lbl" }, "Auto Square-Off Time"),
+                React.createElement("input", { className: "inp", type: "time", value: risk.squareOffTime, onChange: e => setRisk(r => (Object.assign(Object.assign({}, r), { squareOffTime: e.target.value }))) })),
+            React.createElement("label", { className: "flex", style: { cursor: "pointer", marginBottom: 10 } },
+                React.createElement("input", { type: "checkbox", checked: risk.autoSquareOff, onChange: e => setRisk(r => (Object.assign(Object.assign({}, r), { autoSquareOff: e.target.checked }))), style: { width: 16, height: 16 } }),
+                React.createElement("span", { style: { fontSize: 13 } }, "Enable auto square-off"))),
+        React.createElement("div", { className: "stitle" }, "Live Risk Snapshot"),
+        React.createElement("div", { className: "g2" }, [
+            ["Day Loss", fmtINR(dayLoss), (dayLoss / Math.max(1, risk.dailyLossLimit)) * 100, "var(--r)"],
+            ["Trades", `${tradesCount}/${risk.dailyTradeLimit}`, (tradesCount / risk.dailyTradeLimit) * 100, "var(--b)"],
+            ["Margin", `${fmt(usedM, 0)}%`, usedM, usedM > 70 ? "var(--r)" : usedM > 50 ? "var(--y)" : "var(--g)"],
+            ["Available", fmtINR((_d = funds === null || funds === void 0 ? void 0 : funds.equity) === null || _d === void 0 ? void 0 : _d.available_margin), 0, "var(--g)"],
+        ].map(([k, v, pct, col]) => (React.createElement("div", { key: k, className: "card kv" },
+            React.createElement("div", { className: "k" }, k),
+            React.createElement("div", { className: "v", style: { fontSize: 16, color: col } }, v),
+            pct > 0 && React.createElement(React.Fragment, null,
+                React.createElement("div", { className: "pbar" },
+                    React.createElement("div", { className: "pfill", style: { width: `${Math.min(100, pct)}%`, background: col } })))))))));
+    const settingsPage = (React.createElement("div", null,
+        React.createElement("div", { className: "itabs" },
+            React.createElement("div", { className: `itab ${settingsTab === "auth" ? "a" : ""}`, onClick: () => setSettingsTab("auth") }, "Auth"),
+            React.createElement("div", { className: `itab ${settingsTab === "market" ? "a" : ""}`, onClick: () => setSettingsTab("market") }, "Market"),
+            React.createElement("div", { className: `itab ${settingsTab === "ai" ? "a" : ""}`, onClick: () => setSettingsTab("ai") }, "AI")),
+        settingsTab === "auth" && (React.createElement("div", null,
+            React.createElement("div", { className: "card" },
+                React.createElement("div", { className: "field" },
+                    React.createElement("div", { className: "lbl" }, "API Key"),
+                    React.createElement("input", { className: "inp", value: apiKey, onChange: e => setApiKey(e.target.value), placeholder: "86ff9e48-cec3-44b0-...", autoComplete: "off" })),
+                React.createElement("div", { className: "field" },
+                    React.createElement("div", { className: "lbl" }, "API Secret"),
+                    React.createElement("input", { className: "inp", type: "password", value: apiSecret, onChange: e => setApiSecret(e.target.value), placeholder: "abpva6e8dl" }))),
+            React.createElement("div", { className: "card", style: { marginTop: 8, border: "1px solid rgba(0,232,122,0.25)", background: "rgba(0,232,122,0.04)" } },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "var(--g)", fontFamily: "var(--mono)", marginBottom: 8 } }, "\u2705 METHOD A \u2014 Direct Token (Recommended)"),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--muted2)", fontFamily: "var(--mono)", lineHeight: 1.8, marginBottom: 10 } },
+                    "1. Open Upstox app → My Apps → AlgoFo\n",
+                    "2. Tap ⬇️ dropdown → tap \"Generate access token\"\n",
+                    "3. Complete login if asked\n",
+                    "4. Copy the access_token value from the response\n",
+                    "5. Paste it below and tap Save Token"),
+                React.createElement("a", { href: "https://account.upstox.com/developer/apps", target: "_blank", rel: "noreferrer", style: { display: "block", background: "rgba(91,143,255,0.1)", border: "1px solid rgba(91,143,255,0.3)", borderRadius: 8, padding: "9px 12px", color: "var(--b)", fontFamily: "var(--mono)", fontSize: 11, marginBottom: 8, textDecoration: "none" } }, "\uD83D\uDD17 Open Upstox My Apps \u2192"),
+                React.createElement("div", { className: "field" },
+                    React.createElement("div", { className: "lbl" }, "Paste Access Token here"),
+                    React.createElement("textarea", { className: "inp", rows: 4, value: directToken, onChange: e => setDirectToken(e.target.value), placeholder: "Paste the full token starting with eyJ...", style: { resize: "none", fontSize: 11, lineHeight: 1.4 } })),
+                React.createElement("button", { className: "btn pr", style: { marginTop: 0 }, onClick: () => connectWithToken(directToken.trim()).then(() => setDirectToken("")) }, "\uD83D\uDD13 Save Token & Connect"),
+                token && React.createElement("div", { style: { marginTop: 8, padding: "6px 10px", background: "rgba(0,232,122,0.08)", borderRadius: 6, fontSize: 11, fontFamily: "var(--mono)", color: "var(--g)" } },
+                    "\u2705 Token active \u00B7 ",
+                    connected ? "Connected " : "Tap Refresh if needed")),
+            React.createElement("div", { className: "card", style: { marginTop: 8, border: "1px solid var(--bdr2)" } },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: "var(--y)", fontFamily: "var(--mono)", marginBottom: 8 } }, "\u26A0\uFE0F METHOD B \u2014 OAuth (may be blocked by browser sandbox)"),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--muted2)", fontFamily: "var(--mono)", lineHeight: 1.8, marginBottom: 10 } },
+                    "1. Tap the auth link → login on Upstox\n",
+                    "2. Browser redirects to a blank page\n",
+                    "3. Copy the full URL from address bar\n",
+                    "4. Paste below → tap Connect"),
+                authUrl && React.createElement("a", { href: authUrl, target: "_blank", rel: "noreferrer", style: { display: "block", background: "rgba(91,143,255,0.08)", border: "1px solid rgba(91,143,255,0.2)", borderRadius: 8, padding: "9px 12px", color: "var(--b)", fontFamily: "var(--mono)", fontSize: 11, marginBottom: 8, textDecoration: "none" } }, "\uD83D\uDD17 Open Upstox Auth Login \u2192"),
+                React.createElement("div", { className: "field" },
+                    React.createElement("div", { className: "lbl" }, "Redirect URL or Auth Code"),
+                    React.createElement("input", { className: "inp", value: authCode, onChange: e => setAuthCode(e.target.value), placeholder: "https://localhost/?code=XXXXX or just the code" })),
+                React.createElement("button", { className: "btn ol", onClick: connect, style: { marginTop: 0 } }, "\uD83D\uDD13 Connect via OAuth")),
+            React.createElement("div", { style: { marginTop: 8, padding: "8px 10px", background: "rgba(255,204,0,0.06)", border: "1px solid rgba(255,204,0,0.2)", borderRadius: 8, fontSize: 10, fontFamily: "var(--mono)", color: "var(--y)", lineHeight: 1.6 } }, "\u26A0\uFE0F Upstox tokens expire daily. Regenerate every morning before trading via Method A."))),
+        settingsTab === "market" && (React.createElement("div", { className: "card" },
+            React.createElement("div", { className: "field" },
+                React.createElement("div", { className: "lbl" }, "Index"),
+                React.createElement("select", { className: "sel", value: selIndex, onChange: e => {
+                        setSelIndex(e.target.value);
+                        setExpiry("");
+                        setExpiryList([]);
+                        setOptChain([]);
+                        setAtmStrike(0);
+                    } },
+                    React.createElement("option", { value: "NIFTY" }, "Nifty 50"),
+                    React.createElement("option", { value: "BANKNIFTY" }, "Bank Nifty"),
+                    React.createElement("option", { value: "SENSEX" }, "Sensex (BSE)"))),
+            React.createElement("div", { className: "field" },
+                React.createElement("div", { className: "lbl" }, "Expiry Date"),
+                React.createElement("select", { className: "sel", value: expiry, onChange: e => setExpiry(e.target.value) },
+                    React.createElement("option", { value: "" }, "\u2014 Select expiry \u2014"),
+                    expiryList.map(d => React.createElement("option", { key: d, value: d }, d)))),
+            React.createElement("div", { className: "field", style: { marginTop: 8 } },
+                React.createElement("div", { className: "lbl" }, "Backend Server URL"),
+                React.createElement("input", { className: "inp", value: backendUrl, onChange: e => setBackendUrl(e.target.value), placeholder: "https://your-app.onrender.com" }),
+                React.createElement("div", { style: { fontSize: 9, color: "var(--muted)", fontFamily: "var(--mono)", marginTop: 3, lineHeight: 1.6 } }, "Deploy server.py to Render.com (free) and paste URL here for live data")),
+            React.createElement("div", { style: { fontSize: 10, color: backendUrl ? "var(--g)" : "var(--y)", fontFamily: "var(--mono)", padding: "6px 8px", borderRadius: 6, background: backendUrl ? "rgba(0,232,122,0.08)" : "rgba(255,204,0,0.08)", marginBottom: 8 } }, backendUrl ? "✅ Backend configured — live data active" : "⚠️ No backend — set URL above for live data"),
+            React.createElement("button", { className: "btn pr", onClick: () => {
+                    setOptChain([]);
+                    setExpiryList([]);
+                    setExpiry("");
+                    setAtmStrike(0);
+                    fetchLtp().then(() => fetchExpiries().then(() => setTimeout(fetchChain, 500)));
+                    addLog("🔄 Loading " + selIndex + " option chain...", LOG.INFO);
+                } }, "\uD83D\uDD04 Load Chain"))),
+        settingsTab === "ai" && (React.createElement("div", { className: "card" },
+            React.createElement("div", { style: { fontSize: 11, color: "var(--muted2)", fontFamily: "var(--mono)", marginBottom: 10, lineHeight: 1.6 } }, "Claude AI monitors geopolitical events, RBI/Fed announcements, earnings, and adjusts trading strategy recommendations in real time."),
+            React.createElement("div", { className: "field" },
+                React.createElement("div", { className: "lbl" }, "Anthropic API Key"),
+                React.createElement("input", { className: "inp", type: "password", value: claudeKey, onChange: e => setClaudeKey(e.target.value), placeholder: "sk-ant-api03-..." })),
+            React.createElement("div", { style: { fontSize: 10, color: "var(--muted)", fontFamily: "var(--mono)", marginBottom: 10 } }, "Get from console.anthropic.com"),
+            React.createElement("label", { className: "flex", style: { cursor: "pointer", marginBottom: 10 } },
+                React.createElement("input", { type: "checkbox", checked: aiAutoScan, onChange: e => setAiAutoScan(e.target.checked), style: { width: 16, height: 16 } }),
+                React.createElement("span", { style: { fontSize: 13 } }, "Auto AI market scan every 30 min")),
+            claudeKey && React.createElement("div", { style: { fontSize: 11, fontFamily: "var(--mono)", color: "var(--g)" } }, "\u2705 Claude key active")))));
+    const pages = { terminal, orders: ordersPage, strategy: stratPage, risk: riskPage, settings: settingsPage };
+    const navItems = [
+        { id: "terminal", ico: "⬛", label: "Terminal" },
+        { id: "orders", ico: "📋", label: "Orders" },
+        { id: "strategy", ico: "🧠", label: "Strategy" },
+        { id: "risk", ico: "🛡", label: "Risk" },
+        { id: "settings", ico: "⚙️", label: "Settings" },
+    ];
+    // Market open/close status
+    const marketStatus = (() => {
+        const now2 = new Date();
+        const h = now2.getHours(), m = now2.getMinutes(), tot = h * 60 + m;
+        const day = now2.getDay();
+        if (day === 0 || day === 6)
+            return { open: false, label: "Closed · Weekend" };
+        if (tot >= 555 && tot < 930)
+            return { open: false, label: "Pre-market" };
+        if (tot >= 930 && tot < 930 + 375)
+            return { open: true, label: "Market Open" };
+        return { open: false, label: "Market Closed" };
+    })();
+    return (React.createElement(React.Fragment, null,
+        React.createElement("style", null, CSS),
+        React.createElement("div", { className: "app" },
+            React.createElement("div", { style: { flexShrink: 0, background: "var(--s1)", borderBottom: "1px solid var(--bdr)", padding: "0 10px", height: 44, display: "flex", alignItems: "center", gap: 8 } },
+                React.createElement("div", { className: "logo", style: { fontSize: 15 } },
+                    React.createElement("em", null, "ALGO"),
+                    "FO",
+                    React.createElement("sub", null, "v2")),
+                React.createElement("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 } },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 5, border: `1px solid ${marketStatus.open ? "rgba(0,232,122,0.3)" : "rgba(74,74,106,0.4)"}`, background: marketStatus.open ? "rgba(0,232,122,0.07)" : "rgba(74,74,106,0.07)" } },
+                        React.createElement("div", { style: { width: 5, height: 5, borderRadius: "50%", background: marketStatus.open ? "var(--g)" : "var(--muted)", animation: marketStatus.open ? "p 2s infinite" : "none" } }),
+                        React.createElement("span", { style: { fontFamily: "var(--mono)", fontSize: 9, color: marketStatus.open ? "var(--g)" : "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" } }, marketStatus.label)),
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 5, border: `1px solid ${statusColor}33`, background: `${statusColor}0d` } },
+                        React.createElement("div", { style: { width: 5, height: 5, borderRadius: "50%", background: statusColor, animation: botRunning ? "p 1.5s infinite" : "none" } }),
+                        React.createElement("span", { style: { fontFamily: "var(--mono)", fontSize: 9, color: statusColor, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" } },
+                            "Bot ",
+                            botStatus)),
+                    React.createElement("div", { style: { width: 6, height: 6, borderRadius: "50%", background: connected ? "var(--g)" : "var(--muted)", animation: connected ? "p 2s infinite" : "none", flexShrink: 0 } }))),
+            React.createElement("div", { style: { flexShrink: 0, background: "#0a0a16", borderBottom: "1px solid var(--bdr)", padding: "0 8px", height: 42, display: "flex", alignItems: "center", gap: 6 } },
+                React.createElement("select", { className: "sel", style: { flex: 1, padding: "4px 6px", fontSize: 11, height: 30, minWidth: 0 }, value: activeStratId || "", onChange: e => setActiveStratId(e.target.value || null) },
+                    React.createElement("option", { value: "" }, "\u2014 Select Strategy \u2014"),
+                    strategies.map(s => React.createElement("option", { key: s.id, value: s.id }, s.name))),
+                botRunning
+                    ? React.createElement("button", { className: "btn dn sm", onClick: stopBot, style: { flexShrink: 0, padding: "4px 10px", fontSize: 11, height: 30, marginTop: 0 } }, "\u23F9 Stop")
+                    : React.createElement("button", { className: "btn pr sm", onClick: startBot, style: { flexShrink: 0, padding: "4px 12px", fontSize: 11, height: 30, marginTop: 0 } }, "\u25B6 Start")),
+            React.createElement("div", { className: "body" },
+                React.createElement("div", { className: "scroll" }, pages[tab] || pages.terminal)),
+            React.createElement("div", { className: "bottom-nav" }, navItems.map(n => (React.createElement("button", { key: n.id, className: `nav-btn ${tab === n.id ? "active" : ""}`, onClick: () => setTab(n.id) },
+                React.createElement("span", { className: "ico" }, n.ico),
+                React.createElement("span", null, n.label))))))));
+}
+
+try{
+  document.getElementById('loading').style.display='none';
+  ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(AlgoTerminal,null));
+}catch(e){
+  document.getElementById('loading').innerHTML='<div style="color:#ff3355;font-family:monospace;padding:20px;font-size:11px;line-height:1.6;word-break:break-word"><b>App Error</b><br/><br/>'+e.message+'</div>';
+  console.error('AlgoFO:',e.stack);
+}}
+</script>
+</body>
+</html>
