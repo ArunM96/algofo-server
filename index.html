@@ -662,13 +662,18 @@ function AlgoTerminal() {
             ws.onopen = () => {
                 setWsConnected(true);
                 addLog("⚡ WebSocket connected — real-time data active", LOG.INFO);
-                // Tell backend to start Upstox WS with our instruments
                 const idxKey = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
                 ws.send(JSON.stringify({
                     type: "subscribe",
                     token,
                     instruments: [idxKey, "NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank", "BSE_INDEX|SENSEX"]
                 }));
+                // Keepalive ping every 30s — prevents Render 55s idle timeout
+                const _ping = setInterval(() => {
+                    if (ws.readyState === 1) { ws.send(JSON.stringify({ type: "ping" })); }
+                    else { clearInterval(_ping); }
+                }, 30000);
+                ws._ping = _ping;
             };
             ws.onmessage = (e) => {
                 try {
@@ -703,8 +708,9 @@ function AlgoTerminal() {
             ws.onerror = () => { setWsConnected(false); };
             ws.onclose = () => {
                 setWsConnected(false);
-                addLog("⚠️ WebSocket disconnected — reconnecting in 5s...", LOG.WARN);
-                setTimeout(() => connectBackendWS(), 30000); // 30s reconnect
+                if (ws._ping) clearInterval(ws._ping);
+                addLog("⚠️ WebSocket disconnected — reconnecting in 10s...", LOG.WARN);
+                setTimeout(() => connectBackendWS(), 10000);
             };
         }
         catch (e) {
