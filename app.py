@@ -4,7 +4,7 @@ AlgoFO Backend — WebSocket + REST
 - Broadcasts live data to the frontend via its own WebSocket
 - REST endpoints for option chain, positions, orders (not available on WS)
 """
-import os, time, requests, threading, json, struct, logging
+import os, sys, time, requests, threading, json, struct, logging
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_sock import Sock
@@ -106,19 +106,29 @@ def broadcast_to_clients(msg):
         with _clients_lock:
             _clients.difference_update(dead)
 
-def get_ws_auth_url(token):
-    """Get authorized WebSocket URL from Upstox"""
-    h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    r = requests.get(f"{BASE}/feed/market-data-feed/authorize", headers=h, timeout=10)
-    data = r.json()
-    return data.get("data", {}).get("authorized_redirect_uri")
-
 def get_ws_auth_url_v3(token):
-    """Get authorized WebSocket URL V3"""
+    """Get authorized WebSocket URL V3 (V2 discontinued Aug 2025)"""
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    r = requests.get(f"{BASE}/feed/market-data-feed-v3/authorize", headers=h, timeout=10)
-    data = r.json()
-    return data.get("data", {}).get("authorized_redirect_uri")
+    try:
+        # Try V3 first
+        r = requests.get(f"{BASE}/feed/market-data-feed-v3/authorize", headers=h, timeout=10)
+        data = r.json()
+        url = data.get("data", {}).get("authorized_redirect_uri")
+        if url:
+            log.info(f"Got V3 WS URL")
+            return url
+    except Exception as e:
+        log.error(f"V3 auth error: {e}")
+    # Fallback to v2 (may still work for some accounts)
+    try:
+        r = requests.get(f"{BASE}/feed/market-data-feed/authorize", headers=h, timeout=10)
+        data = r.json()
+        return data.get("data", {}).get("authorized_redirect_uri")
+    except:
+        return None
+
+def get_ws_auth_url(token):
+    return get_ws_auth_url_v3(token)
 
 def subscribe_instruments(ws_conn, instruments):
     """Send subscription message to Upstox WebSocket"""
@@ -173,9 +183,13 @@ def on_ws_close(ws_conn, close_status_code, close_msg):
     log.info(f"Upstox WS closed: {close_status_code}")
     with _state_lock:
         _state["ws_connected"] = False
-    # Auto-reconnect after 5s
+    # Auto-reconnect with backoff (15s to avoid spam)
+    global _ws_reconnect_count
+    _ws_reconnect_count = getattr(sys.modules[__name__], '_ws_reconnect_count', 0) + 1
+    delay = min(60, 15 * _ws_reconnect_count)
+    log.info(f"WS reconnecting in {delay}s (attempt {_ws_reconnect_count})")
     if _ws_token:
-        threading.Timer(5.0, lambda: start_websocket(_ws_token, _ws_instruments)).start()
+        threading.Timer(delay, lambda: start_websocket(_ws_token, _ws_instruments)).start()
 
 def on_ws_open(ws_conn):
     log.info("Upstox WS connected ✅")
@@ -322,11 +336,52 @@ def ltp():
 def chain():
     key = request.args.get("instrument_key", "")
     expiry = request.args.get("expiry_date", "")
+    t = tok()
     try:
-        # Always fresh - no cache for chain (data changes every few seconds)
-        return jsonify(up(f"/option/chain?instrument_key={key}&expiry_date={expiry}", tok(), ttl=0))
+        # Try with the key as-is first
+        data = up(f"/option/chain?instrument_key={key}&expiry_date={expiry}", t, ttl=0)
+        # If empty data, log it for debugging
+        if data.get("status") == "success" and not data.get("data"):
+            log.warning(f"Empty chain for key={key} expiry={expiry}")
+            # Try URL-encoded version
+            from urllib.parse import quote
+            encoded_key = quote(key, safe="")
+            data2 = up(f"/option/chain?instrument_key={encoded_key}&expiry_date={expiry}", t, ttl=0)
+            if data2.get("data"):
+                return jsonify(data2)
+        return jsonify(data)
     except Exception as e:
+        log.error(f"Chain error: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/debug/chain")
+def debug_chain():
+    """Test endpoint to diagnose chain issues"""
+    key = request.args.get("instrument_key", "NSE_INDEX|Nifty Bank")
+    expiry = request.args.get("expiry_date", "2026-05-28")
+    t = tok()
+    result = {"key_used": key, "expiry": expiry}
+    try:
+        # Test 1: Option contracts to verify key works
+        contracts = up(f"/option/contract?instrument_key={key}", t, ttl=0)
+        result["contracts_count"] = len(contracts.get("data", []))
+        result["contracts_status"] = contracts.get("status")
+        if contracts.get("data"):
+            sample = contracts["data"][0]
+            result["sample_underlying_key"] = sample.get("underlying_key")
+            result["sample_expiry"] = sample.get("expiry")
+            result["sample_strike"] = sample.get("strike_price")
+        # Test 2: Option chain
+        chain_data = up(f"/option/chain?instrument_key={key}&expiry_date={expiry}", t, ttl=0)
+        result["chain_status"] = chain_data.get("status")
+        result["chain_count"] = len(chain_data.get("data", []))
+        if chain_data.get("data"):
+            first = chain_data["data"][0]
+            result["first_strike"] = first.get("strike_price")
+            result["underlying_spot"] = first.get("underlying_spot_price")
+    except Exception as e:
+        result["error"] = str(e)
+    return jsonify(result)
 
 @app.route("/api/expiries")
 def expiries():
