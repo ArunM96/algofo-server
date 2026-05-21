@@ -49,9 +49,10 @@ def cache_set(key, val, ttl=5):
 
 # ── Upstox REST helper ────────────────────────────────────────────────────────
 def up(path, token, ttl=5):
-    cached = cache_get(path)
-    if cached is not None:
-        return cached
+    if ttl > 0:
+        cached = cache_get(path)
+        if cached is not None:
+            return cached
     h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     r = requests.get(BASE + path, headers=h, timeout=10)
     r.raise_for_status()
@@ -322,7 +323,8 @@ def chain():
     key = request.args.get("instrument_key", "")
     expiry = request.args.get("expiry_date", "")
     try:
-        return jsonify(up(f"/option/chain?instrument_key={key}&expiry_date={expiry}", tok(), ttl=5))
+        # Always fresh - no cache for chain (data changes every few seconds)
+        return jsonify(up(f"/option/chain?instrument_key={key}&expiry_date={expiry}", tok(), ttl=0))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
