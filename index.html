@@ -662,18 +662,13 @@ function AlgoTerminal() {
             ws.onopen = () => {
                 setWsConnected(true);
                 addLog("⚡ WebSocket connected — real-time data active", LOG.INFO);
+                // Tell backend to start Upstox WS with our instruments
                 const idxKey = selIndex === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : selIndex === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
                 ws.send(JSON.stringify({
                     type: "subscribe",
                     token,
                     instruments: [idxKey, "NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank", "BSE_INDEX|SENSEX"]
                 }));
-                // Keepalive ping every 30s — prevents Render 55s idle timeout
-                const _ping = setInterval(() => {
-                    if (ws.readyState === 1) { ws.send(JSON.stringify({ type: "ping" })); }
-                    else { clearInterval(_ping); }
-                }, 30000);
-                ws._ping = _ping;
             };
             ws.onmessage = (e) => {
                 try {
@@ -705,16 +700,11 @@ function AlgoTerminal() {
                 }
                 catch (_a) { }
             };
-            ws.onerror = () => {
-                setWsConnected(false);
-                // Immediate retry on error
-                setTimeout(() => connectBackendWS(), 1000);
-            };
+            ws.onerror = () => { setWsConnected(false); };
             ws.onclose = () => {
                 setWsConnected(false);
-                if (ws._ping) clearInterval(ws._ping);
-                addLog("🔄 WebSocket reconnecting...", LOG.WARN);
-                setTimeout(() => connectBackendWS(), 2000); // 2s fast reconnect
+                addLog("⚠️ WebSocket disconnected — reconnecting in 5s...", LOG.WARN);
+                setTimeout(() => connectBackendWS(), 5000);
             };
         }
         catch (e) {
@@ -954,24 +944,33 @@ Provide concise, actionable advice. Always protect margin. Flag if bot should pa
     const statusColor = { idle: "#444466", scanning: "#ffcc00", signal: "#00e87a", blocked: "#ff3355" }[botStatus];
     // Compute ATM fresh from live LTP every render — don't rely on async state
     const liveAtm = useMemo(() => {
-        // Only set ATM from LIVE LTP when market is open
+        var _a;
         const curLtp = selIndex === "BANKNIFTY" ? bnLtp : selIndex === "SENSEX" ? sensexLtp : niftyLtp;
-        if (!curLtp || !optChain.length) return 0; // 0 = no ATM when market closed
+        if (!curLtp || !optChain.length)
+            return atmStrike || 0;
         const step = selIndex === "BANKNIFTY" ? 100 : 50;
         const computed = Math.round(curLtp / step) * step;
-        let nearest = optChain[0]?.strike_price || computed;
+        // Find nearest actual strike in chain
+        let nearest = ((_a = optChain[0]) === null || _a === void 0 ? void 0 : _a.strike_price) || computed;
         let minDiff = Math.abs(nearest - computed);
         for (const r of optChain) {
             const diff = Math.abs(r.strike_price - computed);
-            if (diff < minDiff) { minDiff = diff; nearest = r.strike_price; }
+            if (diff < minDiff) {
+                minDiff = diff;
+                nearest = r.strike_price;
+            }
         }
         return nearest;
-    }, [optChain, selIndex, bnLtp, niftyLtp, sensexLtp]);
-
-    // Show ALL strikes - user scrolls, ATM highlighted when market open
+    }, [optChain, selIndex, bnLtp, niftyLtp, sensexLtp, atmStrike]);
     const atmRows = useMemo(() => {
-        return optChain; // All strikes, no slicing
-    }, [optChain]);
+        if (!optChain.length)
+            return [];
+        const atm = liveAtm || atmStrike;
+        const idx = optChain.findIndex(r => r.strike_price >= atm);
+        const mid = idx < 0 ? Math.floor(optChain.length / 2) : idx;
+        const s = Math.max(0, mid - 10);
+        return optChain.slice(s, s + 21); // 10 ITM + ATM + 10 OTM = 21
+    }, [optChain, liveAtm, atmStrike]);
     // Strategy form
     const emptyS = { id: "", name: "", mode: "BOTH", qty: 1, useATM: true, manualStrike: 0, tradingIndex: "NIFTY", tradingExpiry: "" };
     const [newS, setNewS] = useState(Object.assign({}, emptyS));
@@ -997,7 +996,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
   --text:#dde0ee;--muted:#4a4a6a;--muted2:#777799;
 }
 /* Layout */
-.app{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);padding-top:50px;padding-top:env(safe-area-inset-top,50px);box-sizing:border-box;}
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);}
 /* Top bar - safe area for iPhone status bar */
 .topbar{flex-shrink:0;background:var(--s1);border-bottom:1px solid var(--bdr);
   padding-top:max(12px,env(safe-area-inset-top));
@@ -1235,7 +1234,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                         fontFamily: "var(--mono)", fontSize: 10, fontWeight: expiry === d ? 700 : 400
                     } }, d)))))));
         })(),
-        React.createElement("div", { style: { marginBottom: 12, overflowY: "auto", maxHeight: "60vh", WebkitOverflowScrolling: "touch", border: "1px solid var(--bdr)", borderRadius: 8 } },
+        React.createElement("div", { style: { marginBottom: 12 } },
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 0, marginBottom: 0 } },
                 React.createElement("div", { style: { textAlign: "center", padding: "4px", fontSize: 9, fontFamily: "var(--mono)", color: "var(--g)", fontWeight: 700, background: "rgba(0,232,122,0.06)", borderRadius: "6px 0 0 0" } }, "\u2501\u2501 CALL \u2501\u2501"),
                 React.createElement("div", { style: { textAlign: "center", padding: "4px 8px", fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted)", background: "var(--s2)", fontWeight: 700 } }, "STRIKE"),
@@ -1259,7 +1258,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                         React.createElement("td", { colSpan: 5, style: { textAlign: "center", color: "var(--muted)", padding: 20, fontSize: 11 } }, "Load chain in Settings \u2192 Market")),
                     atmRows.map((row, i) => {
                         var _a, _b, _c, _d, _e, _f, _g, _h;
-                        const isAtm = liveAtm > 0 && row.strike_price === liveAtm; // Only highlight when market open
+                        const isAtm = row.strike_price === liveAtm || row.strike_price === atmStrike;
                         const isSel = (selStrike === null || selStrike === void 0 ? void 0 : selStrike.strike_price) === row.strike_price;
                         const isRes = resistances.includes(row.strike_price);
                         const isSup = supports.includes(row.strike_price);
@@ -1453,20 +1452,12 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                     "Active: ",
                     backendUrl)))),
         settingsTab === "market" && (React.createElement("div", null,
-            React.createElement("div", { style: { padding: "10px 12px", borderRadius: 8, marginBottom: 10, fontSize: 11, fontFamily: "var(--mono)",
+            React.createElement("div", { style: { padding: "8px 10px", borderRadius: 8, marginBottom: 12, fontSize: 10, fontFamily: "var(--mono)",
                     background: backendUrl ? "rgba(0,232,122,0.08)" : "rgba(255,51,85,0.08)",
                     border: `1px solid ${backendUrl ? "rgba(0,232,122,0.25)" : "rgba(255,51,85,0.3)"}`,
-                    color: backendUrl ? "var(--g)" : "var(--r)", lineHeight: 1.6 } }, backendUrl ? (React.createElement(React.Fragment, null,
-                "\u2705 Backend: ",
-                React.createElement("span", { style: { color: "var(--text)" } }, backendUrl.replace("https://", "")))) : (React.createElement(React.Fragment, null,
-                "\u274C No backend URL set!",
-                React.createElement("br", null),
-                React.createElement("span", { style: { fontSize: 10, color: "var(--muted2)" } },
-                    "Go to Auth tab \u2192 paste your Render URL",
-                    React.createElement("br", null),
-                    "(https://algofo-server.onrender.com)")))),
-            React.createElement("div", { className: "stitle" }, "Select Index"),
-            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 12 } }, [["NIFTY", "Nifty 50", "var(--g)"], ["BANKNIFTY", "BankNifty", "var(--b)"], ["SENSEX", "Sensex", "var(--y)"]].map(([val, label, col]) => (React.createElement("button", { key: val, onClick: () => {
+                    color: backendUrl ? "var(--g)" : "var(--r)" } }, backendUrl ? `✅ Backend: ${backendUrl.replace("https://", "")}` : "❌ No backend — set in Auth tab"),
+            React.createElement("div", { className: "stitle" }, "Index"),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 } }, [["NIFTY", "Nifty 50", "var(--g)"], ["BANKNIFTY", "BankNifty", "var(--b)"], ["SENSEX", "Sensex", "var(--y)"]].map(([val, label, col]) => (React.createElement("button", { key: val, onClick: () => {
                     if (selIndex === val)
                         return;
                     setSelIndex(val);
@@ -1474,65 +1465,46 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                     setExpiryList([]);
                     setOptChain([]);
                     setAtmStrike(0);
-                    addLog("🔄 Switching to " + val, LOG.INFO);
-                }, style: {
-                    background: selIndex === val ? `${col}18` : "var(--s2)",
-                    border: `2px solid ${selIndex === val ? col : "var(--bdr)"}`,
-                    borderRadius: 10, padding: "12px 6px", cursor: "pointer",
-                    color: selIndex === val ? col : "var(--muted2)",
-                    fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
-                    whiteSpace: "pre-line", lineHeight: 1.3,
-                    boxShadow: selIndex === val ? `0 0 12px ${col}33` : "none",
-                    transition: "all 0.2s"
-                } }, label)))),
-            React.createElement("div", { className: "stitle" }, "Select Expiry"),
-            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 } },
-                expiryList.length === 0 && React.createElement("div", { style: { fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" } }, "Tap Load to fetch expiries"),
-                expiryList.map(d => (React.createElement("button", { key: d, onClick: () => setExpiry(d), style: {
-                        background: expiry === d ? "rgba(0,232,122,0.12)" : "var(--s2)",
-                        border: `1px solid ${expiry === d ? "var(--g)" : "var(--bdr)"}`,
-                        borderRadius: 6, padding: "6px 12px", cursor: "pointer",
-                        color: expiry === d ? "var(--g)" : "var(--muted2)",
-                        fontFamily: "var(--mono)", fontSize: 11, fontWeight: expiry === d ? 700 : 400,
-                        transition: "all 0.15s"
-                    } }, d)))),
-            React.createElement("button", { className: "btn pr", onClick: () => {
-                    // Clear everything before loading new index
-                    setOptChain([]);
                     setPcr(0);
                     setSupports([]);
                     setResistances([]);
-                    setActiveCall(null);
-                    setActivePut(null);
-                    addLog(`🔄 Loading ${selIndex} chain (${expiry || "no expiry"})...`, LOG.INFO);
-                    if (!backendUrl) {
-                        addLog("⚠️ Set Backend URL in Auth tab first!", LOG.ERROR);
-                        return;
-                    }
-                    fetchLtp(token).then(() => {
-                        if (!expiry) {
-                            fetchExpiries(token).then(() => addLog("✅ Expiries loaded — select expiry and tap Load Chain", LOG.INFO));
-                        }
-                        else {
-                            setOptChain([]); // Clear stale data immediately
-                            addLog(`⏳ Fetching ${selIndex} chain...`, LOG.INFO);
-                            fetchChain(token).then(() => addLog(`✅ ${selIndex} chain loaded`, LOG.INFO));
-                        }
-                    });
-                } },
-                "\uD83D\uDD04 Load ",
-                selIndex,
-                " ",
-                expiry ? "Chain" : "Expiries"),
-            React.createElement("div", { style: { marginTop: 10, padding: "8px 10px", background: "var(--s1)", borderRadius: 8, fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", lineHeight: 1.8 } },
-                "\uD83D\uDD01 Auto-refresh: every 30s during market hours",
+                    addLog(`🔄 Loading ${val} expiries...`, LOG.INFO);
+                    fetchLtp(token, val).then(() => fetchExpiries(token));
+                }, style: {
+                    background: selIndex === val ? `${col}18` : "var(--s2)",
+                    border: `2px solid ${selIndex === val ? col : "var(--bdr)"}`,
+                    borderRadius: 10, padding: "14px 6px", cursor: "pointer",
+                    color: selIndex === val ? col : "var(--muted2)",
+                    fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700,
+                    boxShadow: selIndex === val ? `0 0 12px ${col}33` : "none",
+                    transition: "all 0.2s"
+                } }, label)))),
+            expiryList.length > 0 && (React.createElement(React.Fragment, null,
+                React.createElement("div", { className: "stitle" }, "Expiry \u2014 tap to load chain"),
+                React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 } }, expiryList.map(d => (React.createElement("button", { key: d, onClick: () => {
+                        setExpiry(d);
+                        setOptChain([]);
+                        addLog(`⏳ Loading ${selIndex} chain for ${d}...`, LOG.INFO);
+                        fetchChain(token);
+                    }, style: {
+                        background: expiry === d ? "rgba(0,232,122,0.15)" : "var(--s2)",
+                        border: `1px solid ${expiry === d ? "var(--g)" : "var(--bdr)"}`,
+                        borderRadius: 6, padding: "7px 14px", cursor: "pointer",
+                        color: expiry === d ? "var(--g)" : "var(--muted2)",
+                        fontFamily: "var(--mono)", fontSize: 11, fontWeight: expiry === d ? 700 : 400,
+                        transition: "all 0.15s"
+                    } }, d)))))),
+            React.createElement("div", { style: { padding: "8px 10px", background: "var(--s1)", borderRadius: 8, fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", lineHeight: 1.9 } },
+                marketStatus.open ? (React.createElement("span", { style: { color: "var(--g)" } }, "\uD83D\uDFE2 Market Open \u2014 chain auto-refreshes every 5s")) : (React.createElement("span", { style: { color: "var(--y)" } },
+                    "\uD83D\uDD34 ",
+                    marketStatus.label,
+                    " \u00B7 Opens 9:15 AM IST")),
                 React.createElement("br", null),
-                "\uD83D\uDCCA Current: ",
-                React.createElement("span", { style: { color: "var(--text)" } }, selIndex),
-                " \u00B7 Expiry: ",
-                React.createElement("span", { style: { color: "var(--y)" } }, expiry || "not set"),
+                selIndex,
+                " \u00B7 ",
+                expiry || "select expiry above",
                 " \u00B7 ATM: ",
-                React.createElement("span", { style: { color: "var(--g)" } }, atmStrike || "—")))),
+                liveAtm || atmStrike || "—"))),
         settingsTab === "ai" && (React.createElement("div", { className: "card" },
             React.createElement("div", { style: { fontSize: 11, color: "var(--muted2)", fontFamily: "var(--mono)", marginBottom: 10, lineHeight: 1.6 } }, "Claude AI monitors geopolitical events, RBI/Fed announcements, earnings, and adjusts trading strategy recommendations in real time."),
             React.createElement("div", { className: "field" },
