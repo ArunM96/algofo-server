@@ -1340,8 +1340,8 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
         React.createElement("div", { className: "div" }),
         (supports.length > 0 || resistances.length > 0) && (React.createElement("div", null,
             React.createElement("div", { className: "stitle" }, "\uD83D\uDCD0 Key Levels (Max OI)"),
-            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8, alignItems: "stretch" } },
-                React.createElement("div", { className: "card", style: { borderColor: "rgba(0,232,122,0.2)", padding: 8 } },
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8, alignItems: "stretch", gridAutoRows: "1fr" } },
+                React.createElement("div", { className: "card", style: { borderColor: "rgba(0,232,122,0.2)", padding: 8, height: "100%" } },
                     React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--g)", marginBottom: 6, fontWeight: 700 } }, "\u25B2 SUPPORT (Put OI)"),
                     supports.map((s, i) => {
                         var _a, _b, _c, _d, _e, _f;
@@ -1360,7 +1360,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                                     "Vol: ",
                                     React.createElement("span", { style: { color: "var(--b)" } }, fmtK(vol))))));
                     })),
-                React.createElement("div", { className: "card", style: { borderColor: "rgba(255,51,85,0.2)", padding: 8 } },
+                React.createElement("div", { className: "card", style: { borderColor: "rgba(255,51,85,0.2)", padding: 8, height: "100%" } },
                     React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--r)", marginBottom: 6, fontWeight: 700 } }, "\u25BC RESISTANCE (Call OI)"),
                     resistances.map((r, i) => {
                         var _a, _b, _c, _d, _e, _f;
