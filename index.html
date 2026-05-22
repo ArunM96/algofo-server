@@ -1225,6 +1225,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                             setOptChain([]);
                             setAtmStrike(0);
                             setPcr(0);
+                            setSelStrike(null);
                             if (expiryCache[val] && expiryCache[val].length) {
                                 setExpiryList(expiryCache[val]);
                                 setExpiry(expiryCache[val][0]);
@@ -1310,13 +1311,15 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                             React.createElement("td", { style: { padding: "6px 4px", textAlign: "center", color: "var(--r)", fontWeight: isAtm ? 700 : 400, borderBottom: "1px solid #10101e" } }, fmt(((_h = (_g = row.put_options) === null || _g === void 0 ? void 0 : _g.market_data) === null || _h === void 0 ? void 0 : _h.ltp) || 0))));
                     }))),
             selStrike && (React.createElement("div", { style: { background: "var(--s2)", border: "1px solid rgba(91,143,255,0.25)", borderRadius: 8, padding: 10, marginTop: 6 } },
-                React.createElement("div", { style: { fontSize: 9, color: "var(--b)", fontFamily: "var(--mono)", marginBottom: 6, fontWeight: 700 } },
-                    "GREEKS \u2014 ",
-                    selStrike.strike_price,
-                    " ",
-                    React.createElement("span", { style: { color: "var(--g)" } }, "CE"),
-                    " / ",
-                    React.createElement("span", { style: { color: "var(--r)" } }, "PE")),
+                React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 } },
+                    React.createElement("div", { style: { fontSize: 9, color: "var(--b)", fontFamily: "var(--mono)", fontWeight: 700 } },
+                        "GREEKS \u2014 ",
+                        selStrike.strike_price,
+                        " ",
+                        React.createElement("span", { style: { color: "var(--g)" } }, "CE"),
+                        " / ",
+                        React.createElement("span", { style: { color: "var(--r)" } }, "PE")),
+                    React.createElement("button", { onClick: () => setSelStrike(null), style: { background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 4px" } }, "\u00D7")),
                 React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 } }, ["delta", "gamma", "theta", "vega"].map(g => {
                     var _a, _b, _c, _d;
                     return (React.createElement("div", { key: g, style: { textAlign: "center" } },
