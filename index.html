@@ -43,7 +43,7 @@ function tryPair(pairs,idx){
 tryPair(CDNS,0);
 function startApp(){
 var useState=React.useState,useEffect=React.useEffect,useRef=React.useRef,useCallback=React.useCallback,useMemo=React.useMemo;
-// React globals provided externally
+// React globals
 const UPSTOX_BASE = "https://api.upstox.com/v2";
 const CLAUDE_API = "https://api.anthropic.com/v1/messages";
 const fmtINR = n => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(n || 0);
@@ -1400,7 +1400,6 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
     const settingsPage = (React.createElement("div", null,
         React.createElement("div", { className: "itabs" },
             React.createElement("div", { className: `itab ${settingsTab === "auth" ? "a" : ""}`, onClick: () => setSettingsTab("auth") }, "Auth"),
-            React.createElement("div", { className: `itab ${settingsTab === "market" ? "a" : ""}`, onClick: () => setSettingsTab("market") }, "Market"),
             React.createElement("div", { className: `itab ${settingsTab === "ai" ? "a" : ""}`, onClick: () => setSettingsTab("ai") }, "AI")),
         settingsTab === "auth" && (React.createElement("div", null,
             React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } },
@@ -1451,60 +1450,6 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                 backendUrl && React.createElement("div", { style: { marginTop: 6, fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted2)", wordBreak: "break-all" } },
                     "Active: ",
                     backendUrl)))),
-        settingsTab === "market" && (React.createElement("div", null,
-            React.createElement("div", { style: { padding: "8px 10px", borderRadius: 8, marginBottom: 12, fontSize: 10, fontFamily: "var(--mono)",
-                    background: backendUrl ? "rgba(0,232,122,0.08)" : "rgba(255,51,85,0.08)",
-                    border: `1px solid ${backendUrl ? "rgba(0,232,122,0.25)" : "rgba(255,51,85,0.3)"}`,
-                    color: backendUrl ? "var(--g)" : "var(--r)" } }, backendUrl ? `✅ Backend: ${backendUrl.replace("https://", "")}` : "❌ No backend — set in Auth tab"),
-            React.createElement("div", { className: "stitle" }, "Index"),
-            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 } }, [["NIFTY", "Nifty 50", "var(--g)"], ["BANKNIFTY", "BankNifty", "var(--b)"], ["SENSEX", "Sensex", "var(--y)"]].map(([val, label, col]) => (React.createElement("button", { key: val, onClick: () => {
-                    if (selIndex === val)
-                        return;
-                    setSelIndex(val);
-                    setExpiry("");
-                    setExpiryList([]);
-                    setOptChain([]);
-                    setAtmStrike(0);
-                    setPcr(0);
-                    setSupports([]);
-                    setResistances([]);
-                    addLog(`🔄 Loading ${val} expiries...`, LOG.INFO);
-                    fetchLtp(token, val).then(() => fetchExpiries(token));
-                }, style: {
-                    background: selIndex === val ? `${col}18` : "var(--s2)",
-                    border: `2px solid ${selIndex === val ? col : "var(--bdr)"}`,
-                    borderRadius: 10, padding: "14px 6px", cursor: "pointer",
-                    color: selIndex === val ? col : "var(--muted2)",
-                    fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700,
-                    boxShadow: selIndex === val ? `0 0 12px ${col}33` : "none",
-                    transition: "all 0.2s"
-                } }, label)))),
-            expiryList.length > 0 && (React.createElement(React.Fragment, null,
-                React.createElement("div", { className: "stitle" }, "Expiry \u2014 tap to load chain"),
-                React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 } }, expiryList.map(d => (React.createElement("button", { key: d, onClick: () => {
-                        setExpiry(d);
-                        setOptChain([]);
-                        addLog(`⏳ Loading ${selIndex} chain for ${d}...`, LOG.INFO);
-                        fetchChain(token);
-                    }, style: {
-                        background: expiry === d ? "rgba(0,232,122,0.15)" : "var(--s2)",
-                        border: `1px solid ${expiry === d ? "var(--g)" : "var(--bdr)"}`,
-                        borderRadius: 6, padding: "7px 14px", cursor: "pointer",
-                        color: expiry === d ? "var(--g)" : "var(--muted2)",
-                        fontFamily: "var(--mono)", fontSize: 11, fontWeight: expiry === d ? 700 : 400,
-                        transition: "all 0.15s"
-                    } }, d)))))),
-            React.createElement("div", { style: { padding: "8px 10px", background: "var(--s1)", borderRadius: 8, fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", lineHeight: 1.9 } },
-                marketStatus.open ? (React.createElement("span", { style: { color: "var(--g)" } }, "\uD83D\uDFE2 Market Open \u2014 chain auto-refreshes every 5s")) : (React.createElement("span", { style: { color: "var(--y)" } },
-                    "\uD83D\uDD34 ",
-                    marketStatus.label,
-                    " \u00B7 Opens 9:15 AM IST")),
-                React.createElement("br", null),
-                selIndex,
-                " \u00B7 ",
-                expiry || "select expiry above",
-                " \u00B7 ATM: ",
-                liveAtm || atmStrike || "—"))),
         settingsTab === "ai" && (React.createElement("div", { className: "card" },
             React.createElement("div", { style: { fontSize: 11, color: "var(--muted2)", fontFamily: "var(--mono)", marginBottom: 10, lineHeight: 1.6 } }, "Claude AI monitors geopolitical events, RBI/Fed announcements, earnings, and adjusts trading strategy recommendations in real time."),
             React.createElement("div", { className: "field" },
