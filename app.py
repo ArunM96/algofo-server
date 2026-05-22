@@ -183,13 +183,15 @@ def on_ws_close(ws_conn, close_status_code, close_msg):
     log.info(f"Upstox WS closed: {close_status_code}")
     with _state_lock:
         _state["ws_connected"] = False
-    # Auto-reconnect with backoff (15s to avoid spam)
+    # Auto-reconnect with backoff
     global _ws_reconnect_count
     _ws_reconnect_count = getattr(sys.modules[__name__], '_ws_reconnect_count', 0) + 1
     delay = min(60, 15 * _ws_reconnect_count)
-    log.info(f"WS reconnecting in {delay}s (attempt {_ws_reconnect_count})")
-    if _ws_token:
+    if _ws_token and len(_ws_token) > 20:
+        log.info(f"WS reconnecting in {delay}s (attempt {_ws_reconnect_count})")
         threading.Timer(delay, lambda: start_websocket(_ws_token, _ws_instruments)).start()
+    else:
+        log.info("WS: No token for reconnect — waiting for client to provide token")
 
 def on_ws_open(ws_conn):
     log.info("Upstox WS connected ✅")
@@ -200,14 +202,19 @@ def on_ws_open(ws_conn):
 
 def start_websocket(token, instruments):
     global _ws_app, _ws_token, _ws_instruments
+    # Validate token before attempting WS connection
+    if not token or len(token) < 20:
+        log.error("WS: No valid token provided — skipping connection")
+        return
     _ws_token = token
     _ws_instruments = instruments
     try:
+        log.info(f"WS: Connecting with token {token[:20]}...")
         ws_url = get_ws_auth_url_v3(token)
         if not ws_url:
             ws_url = get_ws_auth_url(token)
         if not ws_url:
-            log.error("Could not get WS auth URL")
+            log.error("WS: Could not get auth URL — token may be expired")
             return
         log.info(f"Connecting to Upstox WS: {ws_url[:60]}...")
         _ws_app = websocket.WebSocketApp(
@@ -241,7 +248,7 @@ def frontend_ws(ws):
             try:
                 data = json.loads(msg)
                 if data.get("type") == "ping":
-                    ws.send(json.dumps({"type": "pong"}))  # Respond to keepalive
+                    ws.send(json.dumps({"type": "pong", "ts": time.time()}))
                 elif data.get("type") == "subscribe" and data.get("token"):
                     instruments = data.get("instruments", [])
                     threading.Thread(
