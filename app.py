@@ -451,6 +451,22 @@ def full_market():
             result["ws_connected"] = True
     return jsonify(result)
 
+def self_ping():
+    """Ping self every 10 min to prevent Render free tier spin-down"""
+    import time as t
+    t.sleep(60)  # Wait 1 min for server to start
+    while True:
+        try:
+            own_url = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:8080")
+            requests.get(f"{own_url}/api/health", timeout=10)
+            log.info("Self-ping OK")
+        except Exception as e:
+            log.warning(f"Self-ping failed: {e}")
+        t.sleep(600)  # Every 10 minutes
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
+    # Start self-ping thread to prevent spin-down
+    ping_thread = threading.Thread(target=self_ping, daemon=True)
+    ping_thread.start()
     app.run(host="0.0.0.0", port=port, debug=False)
