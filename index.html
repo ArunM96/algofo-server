@@ -1285,7 +1285,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                         fontFamily: "var(--mono)", fontSize: 10, fontWeight: expiry === d ? 700 : 400
                     } }, d)))))));
         })(),
-        React.createElement("div", { style: { marginBottom: 12, overflowY: "scroll", maxHeight: "62vh", WebkitOverflowScrolling: "touch", touchAction: "pan-y", border: "1px solid var(--bdr)", borderRadius: 8 } },
+        React.createElement("div", { style: { marginBottom: 12, overflowY: "auto", maxHeight: "65vh", WebkitOverflowScrolling: "touch", border: "1px solid var(--bdr)", borderRadius: 8 } },
             React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11, tableLayout: "fixed" } },
                 React.createElement("colgroup", null,
                     React.createElement("col", { style: { width: "22%" } }),
@@ -1342,47 +1342,43 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                         React.createElement("div", { style: { fontSize: 11, fontFamily: "var(--mono)", color: "var(--r)", fontWeight: 600 } }, fmt((_d = (_c = selStrike.put_options) === null || _c === void 0 ? void 0 : _c.option_greeks) === null || _d === void 0 ? void 0 : _d[g], 3))));
                 }))))),
         React.createElement("div", { className: "div" }),
-        (supports.length > 0 || resistances.length > 0) && (React.createElement("div", null,
+        React.createElement("div", null,
             React.createElement("div", { className: "stitle" }, "\uD83D\uDCD0 Key Levels (Max OI)"),
-            React.createElement("div", { style: { display: "flex", flexDirection: "row", gap: 8, marginBottom: 8, alignItems: "stretch" } },
-                React.createElement("div", { className: "card", style: { borderColor: "rgba(0,232,122,0.2)", padding: 8, flex: 1, boxSizing: "border-box" } },
+            React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 8 } },
+                React.createElement("div", { style: { flex: 1, background: "var(--s2)", border: "1px solid rgba(0,232,122,0.2)", borderRadius: 10, padding: 8, minHeight: 120 } },
                     React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--g)", marginBottom: 6, fontWeight: 700 } }, "\u25B2 SUPPORT (Put OI)"),
-                    supports.map((s, i) => {
-                        var _a, _b, _c, _d, _e, _f;
+                    supports.length === 0 ? (React.createElement("div", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", paddingTop: 8 } }, "Load chain \u2192")) : supports.map((s, i) => {
+                        var _a, _b, _c, _d;
                         const row = optChain.find(r => r.strike_price === s);
                         const oi = ((_b = (_a = row === null || row === void 0 ? void 0 : row.put_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0;
-                        const chg = ((_d = (_c = row === null || row === void 0 ? void 0 : row.put_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.net_change) || 0;
-                        const vol = ((_f = (_e = row === null || row === void 0 ? void 0 : row.put_options) === null || _e === void 0 ? void 0 : _e.market_data) === null || _f === void 0 ? void 0 : _f.volume) || 0;
-                        return (React.createElement("div", { key: i, style: { borderBottom: i < supports.length - 1 ? "1px solid rgba(0,232,122,0.1)" : "none", paddingBottom: 6, marginBottom: 6 } },
+                        const vol = ((_d = (_c = row === null || row === void 0 ? void 0 : row.put_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.volume) || 0;
+                        return (React.createElement("div", { key: i, style: { borderBottom: i < supports.length - 1 ? "1px solid rgba(0,232,122,0.08)" : "none", paddingBottom: 5, marginBottom: 5 } },
                             React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 14, fontWeight: 700, color: "var(--g)" } }, s),
-                            React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 2 } },
+                            React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 1 } },
                                 React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)" } },
-                                    "OI: ",
-                                    React.createElement("span", { style: { color: "var(--g)" } }, fmtK(oi))),
-                                
+                                    "OI:",
+                                    React.createElement("span", { style: { color: "var(--g)", marginLeft: 3 } }, fmtK(oi))),
                                 React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)" } },
-                                    "Vol: ",
-                                    React.createElement("span", { style: { color: "var(--b)" } }, fmtK(vol))))));
+                                    "Vol:",
+                                    React.createElement("span", { style: { color: "var(--b)", marginLeft: 3 } }, fmtK(vol))))));
                     })),
-                React.createElement("div", { className: "card", style: { borderColor: "rgba(255,51,85,0.2)", padding: 8, flex: 1, boxSizing: "border-box" } },
+                React.createElement("div", { style: { flex: 1, background: "var(--s2)", border: "1px solid rgba(255,51,85,0.2)", borderRadius: 10, padding: 8, minHeight: 120 } },
                     React.createElement("div", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--r)", marginBottom: 6, fontWeight: 700 } }, "\u25BC RESISTANCE (Call OI)"),
-                    resistances.map((r, i) => {
-                        var _a, _b, _c, _d, _e, _f;
+                    resistances.length === 0 ? (React.createElement("div", { style: { fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted)", paddingTop: 8 } }, "Load chain \u2192")) : resistances.map((r, i) => {
+                        var _a, _b, _c, _d;
                         const row = optChain.find(x => x.strike_price === r);
                         const oi = ((_b = (_a = row === null || row === void 0 ? void 0 : row.call_options) === null || _a === void 0 ? void 0 : _a.market_data) === null || _b === void 0 ? void 0 : _b.oi) || 0;
-                        const chg = ((_d = (_c = row === null || row === void 0 ? void 0 : row.call_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.net_change) || 0;
-                        const vol = ((_f = (_e = row === null || row === void 0 ? void 0 : row.call_options) === null || _e === void 0 ? void 0 : _e.market_data) === null || _f === void 0 ? void 0 : _f.volume) || 0;
-                        return (React.createElement("div", { key: i, style: { borderBottom: i < resistances.length - 1 ? "1px solid rgba(255,51,85,0.1)" : "none", paddingBottom: 6, marginBottom: 6 } },
+                        const vol = ((_d = (_c = row === null || row === void 0 ? void 0 : row.call_options) === null || _c === void 0 ? void 0 : _c.market_data) === null || _d === void 0 ? void 0 : _d.volume) || 0;
+                        return (React.createElement("div", { key: i, style: { borderBottom: i < resistances.length - 1 ? "1px solid rgba(255,51,85,0.08)" : "none", paddingBottom: 5, marginBottom: 5 } },
                             React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 14, fontWeight: 700, color: "var(--r)" } }, r),
-                            React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 2 } },
+                            React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 1 } },
                                 React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)" } },
-                                    "OI: ",
-                                    React.createElement("span", { style: { color: "var(--r)" } }, fmtK(oi))),
-                                
+                                    "OI:",
+                                    React.createElement("span", { style: { color: "var(--r)", marginLeft: 3 } }, fmtK(oi))),
                                 React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)" } },
-                                    "Vol: ",
-                                    React.createElement("span", { style: { color: "var(--b)" } }, fmtK(vol))))));
-                    }))))),
+                                    "Vol:",
+                                    React.createElement("span", { style: { color: "var(--b)", marginLeft: 3 } }, fmtK(vol))))));
+                    })))),
         React.createElement("div", { className: "stitle" }, "New Strategy"),
         React.createElement("div", { className: "card" },
             React.createElement("div", { className: "field" },
