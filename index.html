@@ -705,12 +705,16 @@ function AlgoTerminal() {
                 }
                 catch (_a) { }
             };
-            ws.onerror = () => { setWsConnected(false); };
+            ws.onerror = () => {
+                setWsConnected(false);
+                // Immediate retry on error
+                setTimeout(() => connectBackendWS(), 1000);
+            };
             ws.onclose = () => {
                 setWsConnected(false);
                 if (ws._ping) clearInterval(ws._ping);
-                addLog("⚠️ WebSocket disconnected — reconnecting in 10s...", LOG.WARN);
-                setTimeout(() => connectBackendWS(), 10000);
+                addLog("🔄 WebSocket reconnecting...", LOG.WARN);
+                setTimeout(() => connectBackendWS(), 2000); // 2s fast reconnect
             };
         }
         catch (e) {
