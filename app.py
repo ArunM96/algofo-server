@@ -240,7 +240,9 @@ def frontend_ws(ws):
                 break
             try:
                 data = json.loads(msg)
-                if data.get("type") == "subscribe" and data.get("token"):
+                if data.get("type") == "ping":
+                    ws.send(json.dumps({"type": "pong"}))  # Respond to keepalive
+                elif data.get("type") == "subscribe" and data.get("token"):
                     instruments = data.get("instruments", [])
                     threading.Thread(
                         target=start_websocket,
@@ -452,17 +454,26 @@ def full_market():
     return jsonify(result)
 
 def self_ping():
-    """Ping self every 10 min to prevent Render free tier spin-down"""
+    """Ping self every 8 min to prevent Render free tier spin-down"""
     import time as t
-    t.sleep(60)  # Wait 1 min for server to start
+    t.sleep(30)  # Wait for server to start
+    # Try multiple URL sources
+    possible_urls = [
+        os.environ.get("RENDER_EXTERNAL_URL", ""),
+        os.environ.get("RENDER_EXTERNAL_HOSTNAME", ""),
+        "https://algofo-server.onrender.com",  # Hardcoded fallback
+    ]
+    own_url = next((u for u in possible_urls if u and "localhost" not in u), "https://algofo-server.onrender.com")
+    if not own_url.startswith("http"):
+        own_url = f"https://{own_url}"
+    log.info(f"Self-ping URL: {own_url}")
     while True:
         try:
-            own_url = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:8080")
-            requests.get(f"{own_url}/api/health", timeout=10)
-            log.info("Self-ping OK")
+            r = requests.get(f"{own_url}/api/health", timeout=15)
+            log.info(f"Self-ping OK: {r.status_code}")
         except Exception as e:
             log.warning(f"Self-ping failed: {e}")
-        t.sleep(600)  # Every 10 minutes
+        t.sleep(480)  # Every 8 minutes (Render spins down after 15 min)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
