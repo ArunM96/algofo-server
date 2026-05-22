@@ -1021,7 +1021,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
 .nav-btn .ico{font-size:18px;}
 /* Body */
 .body{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0;}
-.scroll{flex:1;overflow-y:auto;overflow-x:hidden;padding:10px;-webkit-overflow-scrolling:touch;}
+.scroll{flex:1;overflow-y:auto;overflow-x:hidden;padding:10px;-webkit-overflow-scrolling:touch;min-height:0;}
 /* Cards */
 .card{background:var(--s2);border:1px solid var(--bdr);border-radius:10px;padding:12px;}
 .card+.card{margin-top:8px;}
@@ -1226,7 +1226,12 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                     React.createElement("span", { style: { color: pcrColor, fontWeight: 700 } }, pcr > 0 ? fmt(pcr, 2) : "—"),
                     React.createElement("span", { style: { color: "var(--muted)" } }, "ATM:"),
                     React.createElement("span", { style: { color: "var(--g)", fontWeight: 700 } }, liveAtm || atmStrike || "—")),
-                expiryList.length > 0 && (React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 } }, expiryList.map(d => (React.createElement("button", { key: d, onClick: () => { setExpiry(d); fetchChain(token); }, style: {
+                expiryList.length > 0 && (React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 } }, expiryList.map(d => (React.createElement("button", { key: d, onClick: () => {
+                        setExpiry(d);
+                        setOptChain([]);
+                        addLog(`⏳ Loading ${selIndex} ${d}...`, LOG.INFO);
+                        setTimeout(() => fetchChain(token), 100);
+                    }, style: {
                         background: expiry === d ? "rgba(0,232,122,0.12)" : "var(--s1)",
                         border: `1px solid ${expiry === d ? "var(--g)" : "var(--bdr)"}`,
                         borderRadius: 5, padding: "3px 8px", cursor: "pointer",
@@ -1255,7 +1260,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                         React.createElement("th", { style: { padding: "5px 4px", fontSize: 9, color: "var(--r)", fontWeight: 400, textTransform: "uppercase", textAlign: "center", borderBottom: "1px solid var(--bdr)" } }, "LTP"))),
                 React.createElement("tbody", null,
                     atmRows.length === 0 && React.createElement("tr", null,
-                        React.createElement("td", { colSpan: 5, style: { textAlign: "center", color: "var(--muted)", padding: 20, fontSize: 11 } }, "Load chain in Settings \u2192 Market")),
+                        React.createElement("td", { colSpan: 5, style: { textAlign: "center", color: "var(--muted)", padding: 20, fontSize: 11 } }, "Tap NF \u00B7 BN \u00B7 SX above \u2192 select expiry")),
                     atmRows.map((row, i) => {
                         var _a, _b, _c, _d, _e, _f, _g, _h;
                         const isAtm = row.strike_price === liveAtm || row.strike_price === atmStrike;
