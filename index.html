@@ -996,10 +996,10 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
   --text:#dde0ee;--muted:#4a4a6a;--muted2:#777799;
 }
 /* Layout */
-.app{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);}
+.app{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);padding-top:50px;padding-top:env(safe-area-inset-top,50px);box-sizing:border-box;}
 /* Top bar - safe area for iPhone status bar */
 .topbar{flex-shrink:0;background:var(--s1);border-bottom:1px solid var(--bdr);
-  padding-top:max(12px,env(safe-area-inset-top));
+  padding-top:8px;
   padding-bottom:8px;
   padding-left:max(10px,env(safe-area-inset-left));
   padding-right:max(10px,env(safe-area-inset-right));
