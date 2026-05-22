@@ -1281,7 +1281,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                         fontFamily: "var(--mono)", fontSize: 10, fontWeight: expiry === d ? 700 : 400
                     } }, d)))))));
         })(),
-        React.createElement("div", { style: { marginBottom: 12, overflowY: "auto", maxHeight: "65vh", WebkitOverflowScrolling: "touch", border: "1px solid var(--bdr)", borderRadius: 8 } },
+        React.createElement("div", { style: { marginBottom: 12, overflowY: "scroll", maxHeight: "62vh", WebkitOverflowScrolling: "touch", touchAction: "pan-y", border: "1px solid var(--bdr)", borderRadius: 8 } },
             React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11, tableLayout: "fixed" } },
                 React.createElement("colgroup", null,
                     React.createElement("col", { style: { width: "22%" } }),
@@ -1355,10 +1355,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                                 React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)" } },
                                     "OI: ",
                                     React.createElement("span", { style: { color: "var(--g)" } }, fmtK(oi))),
-                                React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: chg > 0 ? "var(--g)" : chg < 0 ? "var(--r)" : "var(--muted2)" } },
-                                    "\u0394",
-                                    chg > 0 ? "+" : "",
-                                    fmtK(chg)),
+                                
                                 React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)" } },
                                     "Vol: ",
                                     React.createElement("span", { style: { color: "var(--b)" } }, fmtK(vol))))));
@@ -1377,10 +1374,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                                 React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)" } },
                                     "OI: ",
                                     React.createElement("span", { style: { color: "var(--r)" } }, fmtK(oi))),
-                                React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: chg > 0 ? "var(--g)" : chg < 0 ? "var(--r)" : "var(--muted2)" } },
-                                    "\u0394",
-                                    chg > 0 ? "+" : "",
-                                    fmtK(chg)),
+                                
                                 React.createElement("span", { style: { fontSize: 9, fontFamily: "var(--mono)", color: "var(--muted2)" } },
                                     "Vol: ",
                                     React.createElement("span", { style: { color: "var(--b)" } }, fmtK(vol))))));
