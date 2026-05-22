@@ -278,6 +278,7 @@ function AlgoTerminal() {
     const [optChain, setOptChain] = useState([]);
     const [expiry, setExpiry] = useLS("expiry", "");
     const [expiryList, setExpiryList] = useState([]);
+    const [expiryCache, setExpiryCache] = useState({}); // Cache per index
     const [selIndex, setSelIndex] = useLS("idx", "NIFTY");
     const [atmStrike, setAtmStrike] = useState(0);
     const [pcr, setPcr] = useState(0);
@@ -520,9 +521,10 @@ function AlgoTerminal() {
                 });
                 const filtered = relevant.length > 0 ? relevant : allDates.slice(0, 8);
                 setExpiryList(filtered);
+                setExpiryCache(c => (Object.assign(Object.assign({}, c), { [idx]: filtered }))); // Cache for instant switching
                 if (!expiry && filtered.length)
                     setExpiry(filtered[0]);
-                addLog(`📅 ${selIndex}: ${filtered.length} expiries (next 6M)`, LOG.INFO);
+                addLog(`📅 ${idx}: ${filtered.length} expiries cached`, LOG.INFO);
             }
         }
         catch (e) {
@@ -573,14 +575,33 @@ function AlgoTerminal() {
         if (token && !initialized) {
             setConnected(true);
             setInitialized(true);
-            addLog("🔌 Token found — connecting...", LOG.INFO);
+            addLog("🔌 Token found — loading all indices...", LOG.INFO);
             fetchLtp(token).then(() => {
                 fetchAll(token);
-                fetchExpiries(token).then(() => {
-                    // Chain fetched after expiry resolves
-                    if (expiry)
-                        fetchChain(token);
-                });
+                // Pre-fetch ALL 3 index expiries in parallel for instant switching
+                const indices = ["NIFTY", "BANKNIFTY", "SENSEX"];
+                Promise.all(indices.map(idx => {
+                    const key = idx === "BANKNIFTY" ? "NSE_INDEX|Nifty Bank" : idx === "SENSEX" ? "BSE_INDEX|SENSEX" : "NSE_INDEX|Nifty 50";
+                    return upGet(`/option/contract?instrument_key=${encodeURIComponent(key)}`, token)
+                        .then(d => {
+                        if (d.data) {
+                            const today = new Date();
+                            const sixMonths = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
+                            const all = [...new Set(d.data.map(x => x.expiry))].sort();
+                            const filtered = all.filter(dt => { const dt2 = new Date(dt); return dt2 >= today && dt2 <= sixMonths; });
+                            const list = filtered.length > 0 ? filtered : all.slice(0, 8);
+                            setExpiryCache(c => (Object.assign(Object.assign({}, c), { [idx]: list })));
+                            if (idx === selIndex) {
+                                setExpiryList(list);
+                                if (!expiry && list.length)
+                                    setExpiry(list[0]);
+                            }
+                            addLog(`✅ ${idx}: ${list.length} expiries ready`, LOG.INFO);
+                        }
+                    }).catch(() => { });
+                })).then(() => addLog("⚡ All indices loaded — tap NF/BN/SX to switch", LOG.INFO));
+                if (expiry)
+                    fetchChain(token);
             });
         }
     }, []); // eslint-disable-line
@@ -999,7 +1020,7 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
 .app{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;background:var(--bg);padding-top:50px;padding-top:env(safe-area-inset-top,50px);box-sizing:border-box;}
 /* Top bar - safe area for iPhone status bar */
 .topbar{flex-shrink:0;background:var(--s1);border-bottom:1px solid var(--bdr);
-  padding-top:8px;
+  padding-top:max(12px,env(safe-area-inset-top));
   padding-bottom:8px;
   padding-left:max(10px,env(safe-area-inset-left));
   padding-right:max(10px,env(safe-area-inset-right));
