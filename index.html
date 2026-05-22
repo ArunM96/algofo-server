@@ -1220,13 +1220,22 @@ html,body{background:#07070f;color:#dde0ee;font-family:'Outfit',sans-serif;heigh
                     [["NIFTY", "NF"], ["BANKNIFTY", "BN"], ["SENSEX", "SX"]].map(([val, short]) => (React.createElement("button", { key: val, onClick: () => {
                             if (selIndex === val)
                                 return;
+                            // Instant switch using cache - no API calls
                             setSelIndex(val);
-                            setExpiry("");
-                            setExpiryList([]);
                             setOptChain([]);
                             setAtmStrike(0);
-                            addLog("🔄 Switching to " + val, LOG.INFO);
-                            fetchLtp(token, val).then(() => fetchExpiries(token));
+                            setPcr(0);
+                            if (expiryCache[val] && expiryCache[val].length) {
+                                setExpiryList(expiryCache[val]);
+                                setExpiry(expiryCache[val][0]);
+                                addLog("⚡ " + val + " ready", LOG.INFO);
+                            }
+                            else {
+                                setExpiry("");
+                                setExpiryList([]);
+                                addLog("🔄 Loading " + val + "...", LOG.INFO);
+                                fetchLtp(token, val).then(() => fetchExpiries(token, val));
+                            }
                         }, style: {
                             flex: 1, background: selIndex === val ? "rgba(0,232,122,0.12)" : "var(--s1)",
                             border: `1px solid ${selIndex === val ? "var(--g)" : "var(--bdr)"}`,
