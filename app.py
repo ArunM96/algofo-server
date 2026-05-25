@@ -1,9 +1,6 @@
 """
-AlgoFO Trading Bot - Optimized Version
-Fixes:
-1. /api/health endpoint returning 503 ✅
-2. Unnecessary WebSocket reconnection after market hours ✅
-3. Log spam and storage waste ✅
+AlgoFO Trading Bot - Timezone Fixed Version
+Correctly detects IST time regardless of VPS timezone
 """
 
 from flask import Flask, jsonify, request
@@ -12,7 +9,7 @@ import logging
 import threading
 import time
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 app = Flask(__name__)
@@ -38,33 +35,43 @@ bot_state = {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# MARKET HOURS DETECTION
+# MARKET HOURS DETECTION - FIXED FOR TIMEZONE
 # ════════════════════════════════════════════════════════════════════════════
 
 def is_market_open():
     """
-    Check if NSE market is currently open
+    Check if NSE market is currently open (FIXED TIMEZONE VERSION)
     Market hours: 9:15 AM - 3:30 PM IST, Monday-Friday
+    
+    This works correctly regardless of VPS timezone!
     """
     try:
+        # Get IST timezone
         ist = pytz.timezone('Asia/Kolkata')
-        now = ist.localize(datetime.now())
         
-        # Market opening and closing times
-        market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+        # Get current UTC time
+        utc_now = datetime.utcnow().replace(tzinfo=pytz.UTC)
+        
+        # Convert to IST
+        now_ist = utc_now.astimezone(ist)
+        
+        # Market opening and closing times (in IST)
+        market_open = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
         
         # Check if it's a weekday (Monday=0, Sunday=6)
-        is_weekday = now.weekday() < 5
+        is_weekday = now_ist.weekday() < 5
         
         # Check if current time is within market hours
-        is_open = is_weekday and market_open <= now <= market_close
+        is_open = is_weekday and market_open <= now_ist <= market_close
+        
+        # Debug logging
+        logger.info(f"Time check - IST: {now_ist.strftime('%Y-%m-%d %H:%M:%S %Z')} | Market open: {is_open} | Weekday: {is_weekday}")
         
         return is_open
     except Exception as e:
         logger.error(f"Error checking market hours: {e}")
-        # Default to assuming market is open if we can't determine
-        return True
+        return False  # Default to closed if error
 
 def get_time_until_market_open():
     """
@@ -73,27 +80,27 @@ def get_time_until_market_open():
     """
     try:
         ist = pytz.timezone('Asia/Kolkata')
-        now = ist.localize(datetime.now())
         
-        # Check if it's a weekday
-        if now.weekday() >= 5:
-            # It's weekend, market opens Monday at 9:15 AM
-            # Calculate next Monday
-            days_until_monday = (7 - now.weekday()) % 7
+        # Get current UTC time and convert to IST
+        utc_now = datetime.utcnow().replace(tzinfo=pytz.UTC)
+        now_ist = utc_now.astimezone(ist)
+        
+        # Get next market open time
+        next_open = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        
+        # If market already closed today, set for next day
+        if now_ist.hour >= 15 and now_ist.minute >= 30:
+            next_open = next_open + timedelta(days=1)
+        
+        # If it's weekend, find next Monday
+        if next_open.weekday() >= 5:
+            days_until_monday = (7 - next_open.weekday()) % 7
             if days_until_monday == 0:
-                days_until_monday = 7
-            next_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-            next_open = next_open.replace(day=now.day + days_until_monday)
-        else:
-            # It's a weekday
-            next_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-            
-            # If market already closed today, set for next day
-            if now.hour >= 15 and now.minute >= 30:
-                next_open = next_open.replace(day=now.day + 1)
+                days_until_monday = 1
+            next_open = next_open + timedelta(days=days_until_monday)
         
-        seconds_until = (next_open - now).total_seconds()
-        return max(seconds_until, 30)  # Minimum 30 seconds
+        seconds_until = (next_open - now_ist).total_seconds()
+        return max(seconds_until, 30)
     except Exception as e:
         logger.error(f"Error calculating market open time: {e}")
         return 30
@@ -109,6 +116,8 @@ def health():
     Works 24/7, whether market is open or not
     """
     try:
+        market_open = is_market_open()
+        
         response = {
             "status": bot_state.get("status", "degraded"),
             "clients": bot_state.get("clients", 0),
@@ -118,7 +127,7 @@ def health():
             "last_tick_ago_s": bot_state.get("last_tick_ago_s"),
             "ws_connected": bot_state.get("ws_connected", False),
             "ws_authenticated": bot_state.get("ws_authenticated", False),
-            "market_open": is_market_open(),
+            "market_open": market_open,
             "timestamp": time.time()
         }
         return jsonify(response), 200
@@ -149,9 +158,10 @@ def ws_start():
         
         # Check if market is open
         if not is_market_open():
+            time_until = get_time_until_market_open()
             return jsonify({
                 "error": "Market is closed",
-                "message": f"Market will open in {get_time_until_market_open() / 3600:.1f} hours",
+                "message": f"Market will open in {time_until / 3600:.1f} hours",
                 "status": "market_closed"
             }), 400
         
@@ -257,14 +267,14 @@ def root():
     """Root endpoint"""
     return jsonify({
         "name": "AlgoFO Trading Bot",
-        "version": "2.1",
+        "version": "2.2",
         "status": "running",
         "market_open": is_market_open(),
         "timestamp": time.time()
     }), 200
 
 # ════════════════════════════════════════════════════════════════════════════
-# WEBSOCKET CONNECTION MANAGER (OPTIMIZED)
+# WEBSOCKET CONNECTION MANAGER (OPTIMIZED & TIMEZONE AWARE)
 # ════════════════════════════════════════════════════════════════════════════
 
 def websocket_manager():
@@ -272,27 +282,27 @@ def websocket_manager():
     Smart WebSocket connection manager
     - Only attempts connection during market hours
     - Sleeps during after-hours
-    - Automatically reconnects at 9:15 AM
+    - Automatically reconnects at 9:15 AM IST
     - Prevents log spam and resource waste
+    - TIMEZONE AWARE - Works correctly regardless of VPS timezone
     """
-    logger.info("WebSocket manager thread started")
+    logger.info("WebSocket manager thread started (Timezone-aware)")
     
     while True:
         try:
             if is_market_open():
-                logger.info("Market is open. Ready to connect to WebSocket.")
+                logger.info("✅ Market is open. Ready to connect to WebSocket.")
                 # TODO: Implement actual WebSocket connection here
-                # For now, just wait
                 time.sleep(30)
             else:
                 # Market is closed, don't try to reconnect
                 time_until_open = get_time_until_market_open()
                 hours_until = time_until_open / 3600
                 
-                logger.info(f"Market closed. Will check again in {int(time_until_open)}s (~{hours_until:.1f} hours)")
+                logger.info(f"🌙 Market closed. Next opening in {int(time_until_open)}s (~{hours_until:.1f} hours)")
                 
                 # Sleep in 5-minute intervals instead of spamming
-                sleep_duration = min(300, time_until_open)  # Sleep 5 min or until market opens
+                sleep_duration = min(300, time_until_open)
                 time.sleep(sleep_duration)
         except Exception as e:
             logger.error(f"WebSocket manager error: {e}")
@@ -314,10 +324,9 @@ def self_ping():
     
     while True:
         try:
-            time.sleep(480)  # Ping every 8 minutes
+            time.sleep(480)
             vps_url = os.getenv('VPS_URL', 'http://localhost:8080')
             logger.info(f"Self-ping enabled: {vps_url}")
-            # In production, would use requests.get() here
         except Exception as e:
             logger.error(f"Self-ping error: {e}")
 
@@ -331,12 +340,13 @@ logger.info("Self-ping thread started")
 
 if __name__ == '__main__':
     logger.info("╔" + "=" * 62 + "╗")
-    logger.info("║     AlgoFO Trading Bot - Optimized for MilesWeb VPS           ║")
+    logger.info("║     AlgoFO Trading Bot - Timezone Fixed                       ║")
     logger.info("║     Environment: " + os.getenv('FLASK_ENV', 'production').ljust(43) + "║")
     logger.info("║     Host: " + "0.0.0.0".ljust(50) + "║")
     logger.info("║     Port: " + "8080".ljust(50) + "║")
-    logger.info("║     Market Hours Detection: ✅ ENABLED                         ║")
+    logger.info("║     Market Hours Detection: ✅ ENABLED (IST-Aware)            ║")
     logger.info("║     Smart Reconnection: ✅ ENABLED                            ║")
+    logger.info("║     Timezone: Asia/Kolkata (IST)                              ║")
     logger.info("╚" + "=" * 62 + "╝")
     logger.info("")
     logger.info("Starting Flask server on 0.0.0.0:8080")
